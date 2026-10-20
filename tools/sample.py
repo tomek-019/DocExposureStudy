@@ -6,7 +6,7 @@ Dwa kroki:
 
 1) draw — wczytuje operaty, stosuje wykluczenia automatyczne i ustala LOSOWĄ KOLEJNOŚĆ
    wszystkich instytucji w każdym sektorze (z zapisanym ziarnem). Wynik: kolejka.csv.
-     python3 tools/sample.py draw --jst Baza_teleadresowa_jst.xls --gpw GPW_Wskazniki.htm \
+     python3 tools/sample.py draw --gminy Baza_teleadresowa_jst.xls --spolki GPW_Wskazniki.htm \
          [--uczelnie Wykaz_uczelni.htm] --out losowanie/
 
 2) Weryfikacja ręczna: w kolejka.csv wypełniasz kolumny `decyzja` (T = bierzemy, N = zastępujemy)
@@ -168,7 +168,7 @@ def cmd_draw(a):
     if kol.exists() and not a.nadpisz:
         sys.exit(f"[x] {kol} już istnieje — losowanie robi się raz. (--nadpisz, jeśli naprawdę chcesz od nowa)")
     ziarno = a.ziarno if a.ziarno is not None else random.SystemRandom().randrange(2**31)
-    zrodla = {"gminy": (a.jst, operat_gminy), "spolki": (a.gpw, operat_spolki), "uczelnie": (a.uczelnie, operat_uczelnie)}
+    zrodla = {"gminy": (a.gminy, operat_gminy), "spolki": (a.spolki, operat_spolki), "uczelnie": (a.uczelnie, operat_uczelnie)}
     meta = {"ziarno": ziarno, "data_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "operaty": {}}
     wiersze = []
     for sektor in SEKTORY:
@@ -240,8 +240,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = p.add_subparsers(dest="cmd", required=True)
     d = sp.add_parser("draw", help="wczytaj operaty i ustal losową kolejność")
-    d.add_argument("--jst", help="Baza teleadresowa JST (XLS, MSWiA)")
-    d.add_argument("--gpw", help="zapisana strona GPW 'Wskaźniki' (HTML)")
+    d.add_argument("--gminy", help="Baza teleadresowa JST (XLS, MSWiA)")
+    d.add_argument("--spolki", help="zapisana strona GPW 'Wskaźniki' (HTML)")
     d.add_argument("--uczelnie", help="zapisana strona wykazu uczelni publicznych (HTML)")
     d.add_argument("--out", required=True)
     d.add_argument("--ziarno", type=int, help="ziarno (domyślnie losowe; zapisywane w losowanie.json)")
