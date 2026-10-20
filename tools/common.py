@@ -213,6 +213,7 @@ class Robots:
         if base in self._cache:
             return self._cache[base]
         rp = urllib.robotparser.RobotFileParser(base + "/robots.txt")
+        zapis = {"base": base, "status": None, "tryb": "reguly", "tresc": None}
         try:
             r = self.klient.otworz(base + "/robots.txt", timeout=30, cel="robots")
             try:
@@ -221,16 +222,26 @@ class Robots:
                 self.klient.zamknij(r, uwagi="błąd odczytu treści")
                 raise
             self.klient.zamknij(r, bajty=len(tresc))
-            rp.parse(tresc.decode("utf-8", errors="replace").splitlines())
+            tekst = tresc.decode("utf-8", errors="replace")
+            rp.parse(tekst.splitlines())
+            zapis.update(status=r.status, tresc=tekst)
         except urllib.error.HTTPError as e:
+            zapis["status"] = e.code
             if e.code in (401, 403):
-                rp.disallow_all = True
+                rp.disallow_all = True; zapis["tryb"] = "wszystko_zabronione"
             elif 400 <= e.code < 500:
-                rp.allow_all = True
+                rp.allow_all = True; zapis["tryb"] = "wszystko_dozwolone"
+            else:
+                zapis["tryb"] = "wszystko_zabronione"   # 5xx: parser bez reguł odmawia (can_fetch -> False)
             print(f"[!] robots.txt {base}: HTTP {e.code}", file=sys.stderr)
         except Exception as e:
             rp.disallow_all = True
+            zapis.update(tryb="wszystko_zabronione", blad=str(e))
             print(f"[!] robots.txt niedostępny dla {base}: {e} (nie pobieram z tego hosta)", file=sys.stderr)
+        # migawka robots.txt obok logu żądań — audit.py sprawdza zgodność na dokładnie tej wersji
+        zapis["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with open(self.klient.log.sciezka.parent / "robots.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(zapis, ensure_ascii=False) + "\n")
         self._cache[base] = rp
         return rp
 
