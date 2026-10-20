@@ -1,0 +1,41 @@
+# Dane badania NIGDY nie trafiają do repozytorium (zasady danych osobowych, pkt 4)
+dane/
+pilot/
+*.csv
+*.jsonl
+*.json
+urls.txt
+*.hex
+*.key
+
+# Pobrane dokumenty (na wypadek pracy w katalogu repo)
+*.pdf
+*.doc
+*.docx
+*.docm
+*.dot
+*.dotx
+*.xls
+*.xlsx
+*.xlsm
+*.ppt
+*.pptx
+*.pptm
+*.pps
+*.ppsx
+*.odt
+*.ods
+*.odp
+*.rtf
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
