@@ -23,6 +23,7 @@ Narzędzie badawcze przygotowane na potrzeby pracy inżynierskiej pt. *„Analiz
 
 | Plik | Etap |
 |---|---|
+| `tools/sample.py` | losowanie instytucji z oficjalnych wykazów |
 | `tools/discover.py` | wyszukiwanie dokumentów i losowanie próby |
 | `tools/fetch.py` | pobieranie plików |
 | `tools/extract.py` | odczyt metadanych, pseudonimizacja, usunięcie plików |
