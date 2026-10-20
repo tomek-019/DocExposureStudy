@@ -104,6 +104,23 @@ def host_wykluczony(host: str) -> bool:
     return any(h == s or h.endswith("." + s) for s in WYKLUCZONE_SUFIKSY)
 
 
+def do_uri(url: str) -> str:
+    """Adres z polskimi/specjalnymi znakami -> poprawny URI ASCII (urllib nie wysyła znaków spoza ASCII).
+    Już zakodowane sekwencje %XX zostają bez zmian."""
+    p = urllib.parse.urlsplit(url)
+    host = p.hostname or ""
+    try:
+        host = host.encode("idna").decode("ascii")
+    except UnicodeError:
+        pass
+    netloc = host + (f":{p.port}" if p.port else "")
+    if p.username:
+        netloc = p.username + "@" + netloc
+    sciezka = urllib.parse.quote(p.path, safe="/%:@!$&'()*+,;=-._~")
+    zapytanie = urllib.parse.quote(p.query, safe="=&%:@!$'()*+,;/?-._~")
+    return urllib.parse.urlunsplit((p.scheme, netloc, sciezka, zapytanie, ""))
+
+
 def url_wykluczony(url: str) -> bool:
     return host_wykluczony(urllib.parse.urlsplit(url).netloc)
 
@@ -165,7 +182,7 @@ class Klient:
         self.limiter.czekaj(host)
         self.liczba_zadan += 1
         t0 = time.monotonic()
-        req = urllib.request.Request(url, headers={"User-Agent": self.ua})
+        req = urllib.request.Request(do_uri(url), headers={"User-Agent": self.ua})
         try:
             r = urllib.request.urlopen(req, timeout=timeout)
         except urllib.error.HTTPError as e:
