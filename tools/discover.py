@@ -94,7 +94,16 @@ class Crawler:
         self.kandydaci = {}           # url -> wiersz
         self.n_stron = self.n_sprawdzen = self.n_sitemap = 0
         self.pominiete = {"poza_domena": 0, "wykluczona_domena": 0, "robots": 0, "glebokosc": 0, "pulapka": 0}
+        self.pominiete_gdzie = {k: {} for k in self.pominiete}   # diagnostyka: host + początek ścieżki
         self.powod = "przeszukano wszystko"
+
+    def pomin(self, kat, url):
+        self.pominiete[kat] += 1
+        p = urllib.parse.urlsplit(url)
+        seg = [x for x in p.path.split("/") if x][:2]
+        klucz = p.netloc + "/" + "/".join(seg)
+        d = self.pominiete_gdzie[kat]
+        d[klucz] = d.get(klucz, 0) + 1
 
     # ---- pomocnicze ----
     def w_zakresie(self, url):
@@ -108,7 +117,7 @@ class Crawler:
         if url in self.kandydaci:
             return
         if not self.robots.wolno(url):          # zabronione przez robots.txt nie trafiają do losowania
-            self.pominiete["robots"] += 1
+            self.pomin("robots", url)
             return
         if url not in self.kandydaci:
             self.kandydaci[url] = {"url": url, "rodzina": common.RODZINY[rozsz], "rozszerzenie": rozsz,
@@ -120,9 +129,9 @@ class Crawler:
             return
         self.widziane.add(url)
         if common.url_wykluczony(url):
-            self.pominiete["wykluczona_domena"] += 1; return
+            self.pomin("wykluczona_domena", url); return
         if not self.w_zakresie(url):
-            self.pominiete["poza_domena"] += 1; return
+            self.pomin("poza_domena", url); return
         rozsz = common.rozszerzenie_z_url(url)
         if rozsz in common.RODZINY:
             self.dodaj_kandydata(url, rozsz, zrodlo, rodzic, gl); return
@@ -133,17 +142,17 @@ class Crawler:
             klucz = (p.netloc, p.path)
             self.warianty[klucz] = self.warianty.get(klucz, 0) + 1
             if self.warianty[klucz] > MAX_WARIANTOW_ZAPYTANIA:
-                self.pominiete["pulapka"] += 1; return
+                self.pomin("pulapka", url); return
         typ = "sprawdz" if WZORZEC_POBIERANIA.search(p.path + "?" + p.query) else "strona"
         if gl > self.a.glebokosc and typ == "strona":
-            self.pominiete["glebokosc"] += 1; return
+            self.pomin("glebokosc", url); return
         # link "do pobrania" sprawdzamy nawet za limitem głębokości (bez dalszego śledzenia jego linków)
         self.kolejka.append((url, rodzic, gl, typ))
 
     def pobierz(self, url, cel):
         """GET z limiterem/logiem. Zwraca (content_type, content_disposition, url_koncowy, treść|None)."""
         if not self.robots.wolno(url):
-            self.pominiete["robots"] += 1
+            self.pomin("robots", url)
             return None
         if not self.budzet_ok():            # robots.txt mógł zużyć ostatnie żądanie
             return None
@@ -280,7 +289,10 @@ class Crawler:
             "powod_zakonczenia": self.powod, "budzet": self.a.budzet, "zadan": self.klient.liczba_zadan,
             "glebokosc_max": self.a.glebokosc, "stron_html": self.n_stron, "sitemap_pobranych": self.n_sitemap,
             "sprawdzen_heurystyka": self.n_sprawdzen, "w_kolejce_niezbadane": len(self.kolejka),
-            "pominiete": self.pominiete, "kandydatow": len(kand), "kandydaci_wg_rodziny": rodziny,
+            "pominiete": self.pominiete,
+            "pominiete_najczesciej": {k: dict(sorted(v.items(), key=lambda x: -x[1])[:10])
+                                      for k, v in self.pominiete_gdzie.items() if v},
+            "kandydatow": len(kand), "kandydaci_wg_rodziny": rodziny,
             "zrodla": {z: sum(1 for r in kand if r["zrodlo"] == z) for z in ("sitemap", "link", "heurystyka", "content_type")},
             "limit": self.a.limit, "wylosowano": len(wyl), "ziarno": ziarno,
             "ostrzezenie_js": self.js_ostrzezenie, "user_agent": self.a.ua,
