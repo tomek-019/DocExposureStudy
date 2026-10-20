@@ -42,6 +42,7 @@ POMIJANE_ROZSZ = {
 }
 MAX_HTML = 5 * 1024 * 1024        # strona większa niż 5 MB nie jest parsowana
 MAX_DLUGOSC_URL = 500
+RODZINY_OBRAZOW = {"png", "jpg", "tiff"}
 MAX_WARIANTOW_ZAPYTANIA = 20      # ochrona przed pułapkami (kalendarze, filtry): max wariantów ?query na ścieżkę
 
 
@@ -96,6 +97,7 @@ class Crawler:
         self.pominiete = {"poza_domena": 0, "wykluczona_domena": 0, "robots": 0, "glebokosc": 0, "pulapka": 0}
         self.pominiete_gdzie = {k: {} for k in self.pominiete}   # diagnostyka: host + początek ścieżki
         self.powod = "przeszukano wszystko"
+        self.js_ostrzezenie = False
 
     def pomin(self, kat, url):
         self.pominiete[kat] += 1
@@ -274,8 +276,16 @@ class Crawler:
         with open(self.out / "kandydaci.csv", "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=pola); w.writeheader(); w.writerows(kand)
         ziarno = self.a.ziarno if self.a.ziarno is not None else random.SystemRandom().randrange(2**31)
-        wyl = kand if len(kand) <= self.a.limit else random.Random(ziarno).sample(kand, self.a.limit)
-        wyl = sorted(wyl, key=lambda r: r["url"])
+        # Losowanie z limitem obrazów (decyzja 2026-10-20): najpierw do --limit-obrazow obrazów,
+        # resztę do --limit wypełniają dokumenty; gdy dokumentów brakuje, dobieramy więcej obrazów.
+        rng = random.Random(ziarno)
+        obrazy = [r for r in kand if r["rodzina"] in RODZINY_OBRAZOW]
+        dokumenty = [r for r in kand if r["rodzina"] not in RODZINY_OBRAZOW]
+        rng.shuffle(obrazy); rng.shuffle(dokumenty)
+        n_obr = min(self.a.limit_obrazow, len(obrazy), self.a.limit)
+        n_dok = min(self.a.limit - n_obr, len(dokumenty))
+        n_obr = min(len(obrazy), self.a.limit - n_dok)
+        wyl = sorted(obrazy[:n_obr] + dokumenty[:n_dok], key=lambda r: r["url"])
         with open(self.out / "urls.txt", "w", encoding="utf-8") as f:
             f.write(f"# wylosowano {len(wyl)} z {len(kand)} (ziarno {ziarno}), instytucja {self.a.instytucja}\n")
             for r in wyl:
@@ -294,12 +304,15 @@ class Crawler:
                                       for k, v in self.pominiete_gdzie.items() if v},
             "kandydatow": len(kand), "kandydaci_wg_rodziny": rodziny,
             "zrodla": {z: sum(1 for r in kand if r["zrodlo"] == z) for z in ("sitemap", "link", "heurystyka", "content_type")},
-            "limit": self.a.limit, "wylosowano": len(wyl), "ziarno": ziarno,
+            "limit": self.a.limit, "limit_obrazow": self.a.limit_obrazow, "wylosowano": len(wyl),
+            "wylosowano_dokumentow": n_dok, "wylosowano_obrazow": n_obr,
+            "kandydatow_dokumentow": len(dokumenty), "kandydatow_obrazow": len(obrazy), "ziarno": ziarno,
             "ostrzezenie_js": self.js_ostrzezenie, "user_agent": self.a.ua,
         }
         (self.out / "podsumowanie.json").write_text(json.dumps(pods, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"[+] {self.powod}: {self.klient.liczba_zadan} żądań, {self.n_stron} stron, "
-              f"{len(kand)} dokumentów ({rodziny}); wylosowano {len(wyl)} -> {self.out / 'urls.txt'}",
+              f"{len(kand)} dokumentów ({rodziny}); wylosowano {len(wyl)} "
+              f"({n_dok} dok. + {n_obr} obr.) -> {self.out / 'urls.txt'}",
               file=sys.stderr)
 
 
@@ -311,7 +324,9 @@ def main():
     p.add_argument("--domena", help="zakres crawla (domyślnie host startowy bez www.), np. uni-x.edu.pl")
     p.add_argument("--budzet", type=int, default=1500, help="maks. liczba żądań (domyślnie 1500)")
     p.add_argument("--glebokosc", type=int, default=5, help="maks. głębokość linków od strony startowej (domyślnie 5)")
-    p.add_argument("--limit", type=int, default=100, help="ile dokumentów wylosować (domyślnie 100)")
+    p.add_argument("--limit", type=int, default=100, help="ile plików wylosować (domyślnie 100)")
+    p.add_argument("--limit-obrazow", type=int, default=20,
+                   help="maks. obrazów (png/jpg/tiff) w próbie; resztę wypełniają dokumenty (domyślnie 20)")
     p.add_argument("--ziarno", type=int, help="ziarno losowania (domyślnie losowe, zapisywane w podsumowaniu)")
     p.add_argument("--delay", type=float, default=common.MIN_ODSTEP_S, help="odstęp per host (min. 5 s poza localhost)")
     p.add_argument("--ua", default=common.USER_AGENT, help="User-Agent (domyślnie z common.py)")
