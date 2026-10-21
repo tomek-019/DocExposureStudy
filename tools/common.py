@@ -8,7 +8,7 @@ Zawiera:
   - pamięć podręczną robots.txt pobieranego jawnym User-Agentem,
   - log każdego żądania HTTP w formacie JSONL (podstawa audytu z kamienia milowego).
 """
-import json, sys, time, urllib.error, urllib.parse, urllib.request, urllib.robotparser
+import functools, json, re, sys, time, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
 # ---------- konfiguracja (decyzja 2026-10-20) ----------
@@ -215,21 +215,133 @@ class Klient:
         self.log.zapisz(**pola)
 
 
-# ---------- robots.txt ----------
+# ---------- robots.txt wg RFC 9309 ----------
+
+_ZAREZERWOWANE = set(":/?#[]@!$&'()*+,;=")
+
+
+def _normalizuj_sciezke(s: str, wzorzec: bool = False) -> str:
+    """Kodowanie procentowe wg RFC 9309 §2.2.2: znaki spoza ASCII kodowane, zakodowane znaki
+    niezarezerwowane dekodowane; w regułach zachowujemy '*' i '$' jako znaki specjalne."""
+    wynik, i = [], 0
+    while i < len(s):
+        c = s[i]
+        if c == "%" and i + 3 <= len(s) and all(x in "0123456789abcdefABCDEF" for x in s[i+1:i+3]):
+            ch = chr(int(s[i+1:i+3], 16))
+            if ch.isascii() and ch not in _ZAREZERWOWANE and ch.isprintable() and ch not in "%*$":
+                wynik.append(ch)                  # np. %41 -> A
+            else:
+                wynik.append("%" + s[i+1:i+3].upper())
+            i += 3
+            continue
+        if wzorzec and c in "*$":
+            wynik.append(c)
+        elif c.isascii() and c.isprintable() and c != " ":
+            wynik.append(c)
+        else:
+            wynik.append("".join(f"%{b:02X}" for b in c.encode("utf-8")))
+        i += 1
+    return "".join(wynik)
+
+
+@functools.lru_cache(maxsize=4096)
+def _regex(wzorzec: str):
+    kotwica = wzorzec.endswith("$")
+    if kotwica:
+        wzorzec = wzorzec[:-1]
+    rx = "".join(".*" if c == "*" else re.escape(c) for c in wzorzec)
+    return re.compile(rx + ("$" if kotwica else ""), re.S)
+
+
+def _pasuje(wzorzec: str, sciezka: str) -> bool:
+    """Dopasowanie od początku ścieżki; '*' = dowolny ciąg, '$' na końcu = koniec ścieżki."""
+    return _regex(wzorzec).match(sciezka) is not None
+
+
+class ZasadyRobots:
+    """Parser i dopasowanie robots.txt zgodne z RFC 9309 (urllib.robotparser nie obsługuje '*' i '$'):
+    - grupy: kolejne linie user-agent + reguły; grupa kończy się na następnej linii user-agent po regułach,
+    - wybór grup: dokładna (bez rozróżniania wielkości liter) zgodność z tokenem produktu naszego UA;
+      wszystkie pasujące grupy łączone; w braku — grupy '*'; w braku obu — brak reguł,
+    - reguła: najdłuższy pasujący wzorzec; przy remisie wygrywa allow; pusty Disallow ignorowany."""
+
+    def __init__(self, tekst: str = "", tryb: str = "reguly"):
+        self.tryb = tryb                       # reguly / wszystko_dozwolone / wszystko_zabronione
+        self.grupy = []                        # [(set(agentów), [(allow:bool, wzorzec)])]
+        self.sitemapy = []
+        agenci, reguly, poprzednia_regula = set(), [], False
+        for linia in tekst.splitlines():
+            linia = linia.split("#", 1)[0].strip()
+            if ":" not in linia:
+                continue
+            klucz, wartosc = [x.strip() for x in linia.split(":", 1)]
+            klucz = klucz.lower()
+            if klucz == "user-agent":
+                if poprzednia_regula:
+                    self.grupy.append((agenci, reguly)); agenci, reguly = set(), []
+                    poprzednia_regula = False
+                agenci.add(wartosc.lower())
+            elif klucz in ("allow", "disallow"):
+                if not agenci:
+                    continue                   # reguła poza grupą — ignorowana
+                poprzednia_regula = True
+                if wartosc == "":
+                    continue                   # pusty Disallow/Allow = brak reguły
+                reguly.append((klucz == "allow", _normalizuj_sciezke(wartosc, wzorzec=True)))
+            elif klucz == "sitemap":
+                self.sitemapy.append(wartosc)
+        if agenci:
+            self.grupy.append((agenci, reguly))
+
+    @staticmethod
+    def token(ua: str) -> str:
+        return ua.split("/", 1)[0].split()[0].lower() if ua.strip() else ""
+
+    def reguly_dla(self, ua: str):
+        t = self.token(ua)
+        wlasne = [r for ag, rs in self.grupy if t in ag for r in rs]
+        if any(t in ag for ag, _ in self.grupy):
+            return wlasne
+        return [r for ag, rs in self.grupy if "*" in ag for r in rs]
+
+    def wolno(self, ua: str, url: str) -> bool:
+        if self.tryb == "wszystko_dozwolone":
+            return True
+        if self.tryb == "wszystko_zabronione":
+            return False
+        p = urllib.parse.urlsplit(url)
+        sciezka = _normalizuj_sciezke((p.path or "/") + ("?" + p.query if p.query else ""))
+        najlepsza = None                       # (długość, allow)
+        for allow, wz in self.reguly_dla(ua):
+            if _pasuje(wz, sciezka):
+                kand = (len(wz), allow)
+                if najlepsza is None or kand[0] > najlepsza[0] or (kand[0] == najlepsza[0] and allow):
+                    najlepsza = kand
+        return True if najlepsza is None else najlepsza[1]
+
+    # zgodność z interfejsem urllib.robotparser używanym w discover/audit
+    def can_fetch(self, ua: str, url: str) -> bool:
+        return self.wolno(ua, url)
+
+    def site_maps(self):
+        return self.sitemapy or None
+
+
+# ---------- robots.txt: pobieranie ----------
 
 class Robots:
-    """robots.txt pobierany NASZYM User-Agentem przez Klienta (limiter + log).
-    Semantyka jak w v5 / urllib.robotparser: 401/403 => wszystko zabronione, inne 4xx => wszystko dozwolone,
-    5xx lub błąd sieci => wszystko zabronione (ostrożnie)."""
+    """robots.txt pobierany NASZYM User-Agentem przez Klienta (limiter + log), dopasowanie wg RFC 9309.
+    Statusy: 401/403 => wszystko zabronione (ostrożniej niż RFC 9309 §2.3.1.3, które dopuszcza dostęp
+    przy każdym 4xx); inne 4xx => wszystko dozwolone; 5xx lub błąd sieci => wszystko zabronione."""
 
     def __init__(self, klient: Klient):
         self.klient = klient
         self._cache = {}
 
-    def parser(self, base: str) -> urllib.robotparser.RobotFileParser:
+    def parser(self, base: str) -> "ZasadyRobots":
         if base in self._cache:
             return self._cache[base]
-        rp = urllib.robotparser.RobotFileParser(base + "/robots.txt")
+        rp = ZasadyRobots(tryb="wszystko_zabronione")
         zapis = {"base": base, "status": None, "tryb": "reguly", "tresc": None}
         try:
             r = self.klient.otworz(base + "/robots.txt", timeout=30, cel="robots")
@@ -240,19 +352,18 @@ class Robots:
                 raise
             self.klient.zamknij(r, bajty=len(tresc))
             tekst = tresc.decode("utf-8", errors="replace")
-            rp.parse(tekst.splitlines())
+            rp = ZasadyRobots(tekst)
             zapis.update(status=r.status, tresc=tekst)
         except urllib.error.HTTPError as e:
             zapis["status"] = e.code
             if e.code in (401, 403):
-                rp.disallow_all = True; zapis["tryb"] = "wszystko_zabronione"
+                zapis["tryb"] = "wszystko_zabronione"
             elif 400 <= e.code < 500:
-                rp.allow_all = True; zapis["tryb"] = "wszystko_dozwolone"
+                rp = ZasadyRobots(tryb="wszystko_dozwolone"); zapis["tryb"] = "wszystko_dozwolone"
             else:
-                zapis["tryb"] = "wszystko_zabronione"   # 5xx: parser bez reguł odmawia (can_fetch -> False)
+                zapis["tryb"] = "wszystko_zabronione"   # 5xx
             print(f"[!] robots.txt {base}: HTTP {e.code}", file=sys.stderr)
         except Exception as e:
-            rp.disallow_all = True
             zapis.update(tryb="wszystko_zabronione", blad=str(e))
             print(f"[!] robots.txt niedostępny dla {base}: {e} (nie pobieram z tego hosta)", file=sys.stderr)
         # migawka robots.txt obok logu żądań — audit.py sprawdza zgodność na dokładnie tej wersji
