@@ -43,7 +43,13 @@ POMIJANE_ROZSZ = {
 MAX_HTML = 5 * 1024 * 1024        # strona większa niż 5 MB nie jest parsowana
 MAX_DLUGOSC_URL = 500
 RODZINY_OBRAZOW = {"png", "jpg", "tiff"}
-MAX_WARIANTOW_ZAPYTANIA = 20      # ochrona przed pułapkami (kalendarze, filtry): max wariantów ?query na ścieżkę
+# Ochrona przed pułapkami (2026-10-21): limit wariantów zapytania na ścieżkę odcinał całe serwisy CMS
+# z adresami typu /asp/pl_start.asp?typ=..&menu=.. i stronicowanie BIP, więc go usunięto. Nieskończone
+# kalendarze/stronicowania ogranicza limit głębokości (każdy kolejny link = +1) i budżet żądań.
+# Zostają: normalizacja zapytania (kolejność, parametry sesji i śledzące) i wykrywanie powtarzających
+# się segmentów ścieżki (pętle względnych linków, np. /a/b/a/b/a/b/).
+PARAMETRY_POMIJANE = re.compile(r"^(utm_\w+|fbclid|gclid|phpsessid|sessionid|jsessionid)$", re.I)
+MAX_POWTORZEN_SEGMENTU = 3
 
 
 class Linki(HTMLParser):
@@ -74,8 +80,16 @@ def normalizuj_url(href: str, baza: str) -> str:
     netloc = p.netloc.lower()
     if (p.scheme == "http" and netloc.endswith(":80")) or (p.scheme == "https" and netloc.endswith(":443")):
         netloc = netloc.rsplit(":", 1)[0]
-    u = urllib.parse.urlunsplit((p.scheme, netloc, p.path or "/", p.query, ""))
+    pary = [(k, v) for k, v in urllib.parse.parse_qsl(p.query, keep_blank_values=True)
+            if not PARAMETRY_POMIJANE.match(k)]
+    zapytanie = urllib.parse.urlencode(sorted(pary), doseq=True) if p.query else ""
+    u = urllib.parse.urlunsplit((p.scheme, netloc, p.path or "/", zapytanie, ""))
     return u if len(u) <= MAX_DLUGOSC_URL else ""
+
+
+def petla_segmentow(sciezka: str) -> bool:
+    seg = [x for x in sciezka.split("/") if x]
+    return any(seg.count(x) > MAX_POWTORZEN_SEGMENTU for x in set(seg))
 
 
 class Crawler:
@@ -91,7 +105,6 @@ class Crawler:
         self.robots = common.Robots(self.klient)
         self.kolejka = deque()
         self.widziane = set()
-        self.warianty = {}
         self.kandydaci = {}           # url -> wiersz
         self.n_stron = self.n_sprawdzen = self.n_sitemap = 0
         self.pominiete = {"poza_domena": 0, "wykluczona_domena": 0, "robots": 0, "glebokosc": 0, "pulapka": 0}
@@ -140,11 +153,8 @@ class Crawler:
         if rozsz in POMIJANE_ROZSZ:
             return
         p = urllib.parse.urlsplit(url)
-        if p.query:
-            klucz = (p.netloc, p.path)
-            self.warianty[klucz] = self.warianty.get(klucz, 0) + 1
-            if self.warianty[klucz] > MAX_WARIANTOW_ZAPYTANIA:
-                self.pomin("pulapka", url); return
+        if petla_segmentow(p.path):
+            self.pomin("pulapka", url); return
         typ = "sprawdz" if WZORZEC_POBIERANIA.search(p.path + "?" + p.query) else "strona"
         if gl > self.a.glebokosc and typ == "strona":
             self.pomin("glebokosc", url); return
