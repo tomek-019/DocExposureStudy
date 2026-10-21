@@ -10,6 +10,8 @@ Przykład:
 import argparse, csv, hashlib, hmac, json, os, re, secrets, shutil, subprocess, sys
 from pathlib import Path
 
+import common
+
 # ---------- pseudonimizacja (zasady danych osobowych v1, pkt 3) ----------
 
 # Domyślna ścieżka klucza jak w v5 — zmiana ścieżki = nowy klucz = inne pseudonimy niż w pilocie.
@@ -122,8 +124,14 @@ def expand_zips(indir: Path) -> dict:
             infos = [i for i in z.infolist() if not i.is_dir()]
             if len(infos) > ZIP_MAX_MEMBERS or sum(i.file_size for i in infos) > ZIP_MAX_TOTAL:
                 print(f"[!] {zp.name}: za duże archiwum, pomijam", file=sys.stderr); continue
+            pominiete = 0
             for j, info in enumerate(infos):
                 inner = member_name(info)
+                # tylko formaty z listy (decyzja 2026-10-21); zagnieżdżone ZIP-y i np. XML/XHTML pomijane
+                rozsz = inner.rsplit(".", 1)[-1].lower() if "." in inner.rsplit("/", 1)[-1] else ""
+                if rozsz not in common.RODZINY or rozsz == "zip":
+                    pominiete += 1
+                    continue
                 safe = re.sub(r"[^\w.\-]", "_", Path(inner.replace("\\", "/")).name)[:120] or "plik"
                 target = dest / f"{j:03d}_{safe}"            # płaska nazwa => brak zip-slip
                 if not target.exists():
@@ -131,7 +139,8 @@ def expand_zips(indir: Path) -> dict:
                         shutil.copyfileobj(src, f)
                 mtime = "%04d-%02d-%02d %02d:%02d:%02d" % info.date_time
                 out[target.name] = (zp.name, inner, mtime)
-        print(f"[+] rozpakowano {zp.name}: {len(infos)} plików", file=sys.stderr)
+        print(f"[+] rozpakowano {zp.name}: {len(infos) - pominiete} plików"
+              + (f" (pominięto {pominiete} spoza listy formatów)" if pominiete else ""), file=sys.stderr)
     return out
 
 def cmd_extract(a):
