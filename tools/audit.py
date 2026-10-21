@@ -14,7 +14,7 @@ Sprawdza:
   5. sygnały przeciążenia serwera (HTTP 429/503) — do wiadomości.
 Kod wyjścia 0 = wszystko OK, 1 = co najmniej jedno naruszenie.
 """
-import argparse, collections, json, sys, urllib.parse, urllib.robotparser
+import argparse, collections, json, sys, urllib.parse
 from pathlib import Path
 
 import common
@@ -28,18 +28,12 @@ def wczytaj_jsonl(p):
 
 
 def parsery_robots(katalog: Path, ua: str, online: bool):
-    """{base: RobotFileParser} z migawek; przy --robots-online brakujące pobiera teraz (1 żądanie na host)."""
+    """{base: ZasadyRobots} z migawek (dopasowanie RFC 9309); przy --robots-online brakujące pobiera teraz."""
     wynik = {}
     p = katalog / "robots.jsonl"
     if p.exists():
         for z in wczytaj_jsonl(p):
-            rp = urllib.robotparser.RobotFileParser()
-            if z["tryb"] == "wszystko_zabronione":
-                rp.disallow_all = True
-            elif z["tryb"] == "wszystko_dozwolone":
-                rp.allow_all = True
-            else:
-                rp.parse((z.get("tresc") or "").splitlines())
+            rp = common.ZasadyRobots(z.get("tresc") or "", tryb=z["tryb"])
             wynik.setdefault(z["base"], rp)          # pierwsza migawka = ta, według której działał crawler
     if online:
         log = common.LogZadan(katalog / "zadania_audit.jsonl")
