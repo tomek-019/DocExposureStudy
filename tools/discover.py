@@ -14,7 +14,7 @@ Zasady (dziennik 2026-10-18):
 Wyjście w katalogu --out:
   kandydaci.csv     wszystkie znalezione dokumenty (url, rodzina, rozszerzenie, źródło, strona-rodzic, głębokość)
   urls.txt          wylosowane URL-e w formacie wejściowym fetch.py ("URL,instytucja")
-  podsumowanie.json liczby, budżet, ziarno losowania, powód zakończenia
+  podsumowanie.json liczby, budżet, ziarno losowania, powód zakończenia, odrzucone typy odpowiedzi
   zadania_discover.jsonl  log żądań
 
 Przykład:
@@ -50,6 +50,11 @@ RODZINY_OBRAZOW = {"png", "jpg", "tiff"}
 # się segmentów ścieżki (pętle względnych linków, np. /a/b/a/b/a/b/).
 PARAMETRY_POMIJANE = re.compile(r"^(utm_\w+|fbclid|gclid|phpsessid|sessionid|jsessionid)$", re.I)
 MAX_POWTORZEN_SEGMENTU = 3
+# Odrzucone typy odpowiedzi (decyzja 2026-10-22): odpowiedź, która nie jest ani HTML, ani dokumentem
+# z listy, jest liczona per Content-Type z przykładowymi adresami; przy >= PROG_OSTRZEZENIA odrzuceń
+# jednego typu crawl kończy się ostrzeżeniem (próg tylko informacyjny, nie wpływa na dane).
+PRZYKLADOW_NA_TYP = 3
+PROG_OSTRZEZENIA = 20
 
 
 class Linki(HTMLParser):
@@ -109,6 +114,7 @@ class Crawler:
         self.n_stron = self.n_sprawdzen = self.n_sitemap = 0
         self.pominiete = {"poza_domena": 0, "wykluczona_domena": 0, "robots": 0, "glebokosc": 0, "pulapka": 0}
         self.pominiete_gdzie = {k: {} for k in self.pominiete}   # diagnostyka: host + początek ścieżki
+        self.odrzucone = {}           # Content-Type -> {"sprawdzenie": n, "strona": n, "przyklady": [url]}
         self.powod = "przeszukano wszystko"
         self.js_ostrzezenie = False
 
@@ -119,6 +125,14 @@ class Crawler:
         klucz = p.netloc + "/" + "/".join(seg)
         d = self.pominiete_gdzie[kat]
         d[klucz] = d.get(klucz, 0) + 1
+
+    def odrzuc(self, ct, typ, url):
+        """Odpowiedź ani HTML, ani dokument z listy: licznik per Content-Type + przykładowe adresy."""
+        klucz = (ct or "").split(";")[0].strip() or "(brak Content-Type)"
+        d = self.odrzucone.setdefault(klucz, {"sprawdzenie": 0, "strona": 0, "przyklady": []})
+        d["sprawdzenie" if typ == "sprawdz" else "strona"] += 1
+        if len(d["przyklady"]) < PRZYKLADOW_NA_TYP:
+            d["przyklady"].append(url)
 
     # ---- pomocnicze ----
     def w_zakresie(self, url):
@@ -237,6 +251,9 @@ class Crawler:
             zrodlo = "heurystyka" if typ == "sprawdz" else "content_type"
             self.dodaj_kandydata(url, rozsz, zrodlo, rodzic, gl)
             return
+        if not ct.startswith(("text/html", "application/xhtml")):
+            self.odrzuc(ct, typ, url)                    # ani strona, ani dokument z listy
+            return
         if tresc is None or len(tresc) > MAX_HTML:
             return
         if final != url and not self.w_zakresie(final):
@@ -303,6 +320,7 @@ class Crawler:
         rodziny = {}
         for r in kand:
             rodziny[r["rodzina"]] = rodziny.get(r["rodzina"], 0) + 1
+        odrzucone = dict(sorted(self.odrzucone.items(), key=lambda x: -(x[1]["sprawdzenie"] + x[1]["strona"])))
         pods = {
             "instytucja": self.a.instytucja, "start": self.start, "zakres_domena": self.domena,
             "zakonczono_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "czas_crawla_s": round(czas_s),
@@ -312,6 +330,7 @@ class Crawler:
             "pominiete": self.pominiete,
             "pominiete_najczesciej": {k: dict(sorted(v.items(), key=lambda x: -x[1])[:10])
                                       for k, v in self.pominiete_gdzie.items() if v},
+            "odrzucone_typy": odrzucone,
             "kandydatow": len(kand), "kandydaci_wg_rodziny": rodziny,
             "zrodla": {z: sum(1 for r in kand if r["zrodlo"] == z) for z in ("sitemap", "link", "heurystyka", "content_type")},
             "limit": self.a.limit, "limit_obrazow": self.a.limit_obrazow, "wylosowano": len(wyl),
@@ -324,6 +343,12 @@ class Crawler:
               f"{len(kand)} dokumentów ({rodziny}); wylosowano {len(wyl)} "
               f"({n_dok} dok. + {n_obr} obr.) -> {self.out / 'urls.txt'}",
               file=sys.stderr)
+        for ct, d in odrzucone.items():
+            n = d["sprawdzenie"] + d["strona"]
+            if n >= PROG_OSTRZEZENIA:
+                print(f"[!] odrzucono {n} odpowiedzi typu {ct} (sprawdzenia: {d['sprawdzenie']}, "
+                      f"strony: {d['strona']}) — sprawdź przykłady w podsumowanie.json (odrzucone_typy)",
+                      file=sys.stderr)
 
 
 def main():
