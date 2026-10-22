@@ -56,8 +56,11 @@ MIME = {
     "image/png": "png", "image/jpeg": "jpg", "image/tiff": "tiff",
     "application/zip": "zip", "application/x-zip-compressed": "zip",
 }
+# Typy ogólne: format rozstrzyga nazwa pliku z Content-Disposition, a w braku — rozszerzenie z URL.
+# application/x-unknown (decyzja 2026-10-22): wysyłany np. przez BIP gminy pilotowej dla załączników;
+# wcześniej takie odpowiedzi były odrzucane po cichu (728 sprawdzeń heurystyki w pilocie).
 MIME_OGOLNE = {"application/octet-stream", "binary/octet-stream", "application/force-download",
-               "application/download", "application/x-download"}
+               "application/download", "application/x-download", "application/x-unknown"}
 
 
 def rozszerzenie_z_url(url: str) -> str:
