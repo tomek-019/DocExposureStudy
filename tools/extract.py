@@ -18,13 +18,25 @@ import common
 DOMYSLNY_KLUCZ = "~/.config/meta2csv/key.hex"
 
 # Tagi (bez grupy), których wartość w całości traktujemy jako potencjalne imię/nazwisko/login.
+# 2026-10-22: dodane CopyrightNotice, Credit, Photographer, For (PostScript, Illustrator) — w pilocie
+# jawne imiona i nazwiska w tagach spoza listy; dodatkowo każdy tag zawierający "Author" (np. XPAuthor,
+# EL_Author z szablonów Eurolook) — patrz czy_osobowy().
 PERSON_TAGS = re.compile(
     r"^(Author|Authors|Creator|LastModifiedBy|LastSavedBy|Manager|Contributor|Artist|"
-    r"OwnerName|Owner|By-line|Writer|Copyright|Rights|Editor|Operator|Company-?User)$",
+    r"OwnerName|Owner|By-line|Writer|Copyright|Rights|Editor|Operator|Company-?User|"
+    r"CopyrightNotice|Credit|Photographer|For)$",
     re.I,
 )
 # Wyjątki: pola o tej nazwie, które w danej grupie zawierają nazwę aplikacji, nie osobę.
 NOT_PERSON = {"PDF:Creator"}  # w słowniku Info PDF /Creator = aplikacja źródłowa
+
+
+def czy_osobowy(klucz: str) -> bool:
+    """klucz = 'Grupa:Tag'. True, gdy wartość tagu w całości może być osobą (do pseudonimizacji)."""
+    if klucz in NOT_PERSON:
+        return False
+    tag = klucz.split(":", 1)[-1]
+    return bool(PERSON_TAGS.match(tag)) or "author" in tag.lower()
 
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 # Ścieżki z nazwą użytkownika: C:\Users\jkowalski\..., C:\Documents and Settings\x\..., /home/x/, /Users/x/
@@ -197,8 +209,7 @@ def cmd_extract(a):
             if k.startswith(DROP_PREFIXES):
                 continue
             s = to_str(v)
-            tag = k.split(":", 1)[-1]
-            if s and PERSON_TAGS.match(tag) and k not in NOT_PERSON:
+            if s and czy_osobowy(k):
                 s = pseud(key, s, "P"); pseud_fields.append(k)
             else:
                 s, ch = scrub_text(key, s)
