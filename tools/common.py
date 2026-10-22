@@ -13,7 +13,10 @@ from pathlib import Path
 
 # ---------- konfiguracja (decyzja 2026-10-20) ----------
 PROJEKT = "DocExposureStudy"                                 # nazwa projektu w User-Agencie
-WERSJA = "1.0"
+# WERSJA: podbijać (1.1 -> 1.2), gdy zmiana wpływa na to, jakie żądania są wysyłane albo które pliki są
+# przyjmowane/pobierane (logika sieciowa common/discover/fetch). Bez podbicia: raporty, logi, extract,
+# klasyfikacja, summarize. Historia: 1.0 = pilot i testy do 2026-10-21; 1.1 (2026-10-22) = x-unknown przyjmowany.
+WERSJA = "1.1"
 REPO_URL = "https://github.com/tomek-019/DocExposureStudy"   # publiczne repozytorium z README badania
 USER_AGENT = f"{PROJEKT}/{WERSJA} (+{REPO_URL})"
 
