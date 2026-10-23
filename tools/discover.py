@@ -9,6 +9,9 @@ Zasady (dziennik 2026-10-18):
   - dokument = link z rozszerzeniem z listy formatów; linki wyglądające na pobieranie
     (download/attachment/pobierz/plik/getfile…) bez rozszerzenia są sprawdzane po Content-Type,
   - robots.txt (jawny UA), min. 5 s per host, pomijanie gov.pl i PWr, log każdego żądania,
+  - kolejność (decyzja 2026-10-23, UA 1.2): przeszukiwanie wszerz od strony głównej po linkach; strony
+    z sitemap trafiają do kolejki ZAPASOWEJ, odwiedzanej dopiero po wyczerpaniu kolejki głównej
+    (dokumenty z listy formatów wskazane w sitemapie od razu trafiają do kandydatów, bez żądania),
   - losowanie: do --limit (domyślnie 100) dokumentów z zapisanym ziarnem.
 
 Wyjście w katalogu --out:
@@ -109,6 +112,11 @@ class Crawler:
         self.klient = common.Klient(a.ua, self.log, common.Limiter(a.delay), etap="discover")
         self.robots = common.Robots(self.klient)
         self.kolejka = deque()
+        # kolejka zapasowa na strony z sitemap (decyzja 2026-10-23): duża sitemapa (np. aktualności) zapełniała
+        # poziom 1 przed linkami ze strony głównej i budżet kończył się, zanim crawler doszedł do BIP/menu
+        self.kolejka_zapas = deque()
+        self.w_zapasie = set()        # URL-e czekające w kolejce zapasowej (promowane, gdy znajdzie je link)
+        self.n_stron_z_zapasu = 0
         self.widziane = set()
         self.kandydaci = {}           # url -> wiersz
         self.n_stron = self.n_sprawdzen = self.n_sitemap = 0
@@ -154,7 +162,16 @@ class Crawler:
 
     def przyjmij(self, url, rodzic, gl, zrodlo):
         """Klasyfikuje znaleziony URL: dokument (bez żądania), do sprawdzenia albo strona do odwiedzenia."""
-        if not url or url in self.widziane:
+        if not url:
+            return
+        if url in self.widziane:
+            # strona z sitemapy, którą teraz znalazł link: przenosimy ją do kolejki głównej
+            if zrodlo != "sitemap" and url in self.w_zapasie:
+                self.w_zapasie.discard(url)
+                p = urllib.parse.urlsplit(url)
+                typ = "sprawdz" if WZORZEC_POBIERANIA.search(p.path + "?" + p.query) else "strona"
+                if not (gl > self.a.glebokosc and typ == "strona"):
+                    self.kolejka.append((url, rodzic, gl, typ))
             return
         self.widziane.add(url)
         if common.url_wykluczony(url):
@@ -173,7 +190,10 @@ class Crawler:
         if gl > self.a.glebokosc and typ == "strona":
             self.pomin("glebokosc", url); return
         # link "do pobrania" sprawdzamy nawet za limitem głębokości (bez dalszego śledzenia jego linków)
-        self.kolejka.append((url, rodzic, gl, typ))
+        if zrodlo == "sitemap":
+            self.kolejka_zapas.append((url, rodzic, gl, typ)); self.w_zapasie.add(url)
+        else:
+            self.kolejka.append((url, rodzic, gl, typ))
 
     def pobierz(self, url, cel):
         """GET z limiterem/logiem. Zwraca (content_type, content_disposition, url_koncowy, treść|None)."""
@@ -284,15 +304,23 @@ class Crawler:
         self.kolejka.append((self.start, "", 0, "strona"))
         self.sitemapy()
         t0 = time.time()
-        while self.kolejka:
+        while self.kolejka or self.kolejka_zapas:
             if not self.budzet_ok():
                 self.powod = "wyczerpany budżet"; break
-            url, rodzic, gl, typ = self.kolejka.popleft()
+            if self.kolejka:
+                url, rodzic, gl, typ = self.kolejka.popleft()
+            else:
+                url, rodzic, gl, typ = self.kolejka_zapas.popleft()
+                if url not in self.w_zapasie:
+                    continue                             # już przeniesiona do kolejki głównej
+                self.w_zapasie.discard(url)
+                self.n_stron_z_zapasu += 1
             self.strona(url, rodzic, gl, typ)
             if self.klient.liczba_zadan % 25 == 0:
                 print(f"[i] żądań {self.klient.liczba_zadan}/{self.a.budzet}, stron {self.n_stron}, "
-                      f"dokumentów {len(self.kandydaci)}, w kolejce {len(self.kolejka)}", file=sys.stderr)
-        if not self.budzet_ok() and self.kolejka:
+                      f"dokumentów {len(self.kandydaci)}, w kolejce {len(self.kolejka)} (+{len(self.w_zapasie)} z sitemap)",
+                      file=sys.stderr)
+        if not self.budzet_ok() and (self.kolejka or self.w_zapasie):
             self.powod = "wyczerpany budżet"
         self.zapisz(time.time() - t0)
 
@@ -327,6 +355,7 @@ class Crawler:
             "powod_zakonczenia": self.powod, "budzet": self.a.budzet, "zadan": self.klient.liczba_zadan,
             "glebokosc_max": self.a.glebokosc, "stron_html": self.n_stron, "sitemap_pobranych": self.n_sitemap,
             "sprawdzen_heurystyka": self.n_sprawdzen, "w_kolejce_niezbadane": len(self.kolejka),
+            "w_kolejce_zapasowej_niezbadane": len(self.w_zapasie), "stron_z_kolejki_zapasowej": self.n_stron_z_zapasu,
             "pominiete": self.pominiete,
             "pominiete_najczesciej": {k: dict(sorted(v.items(), key=lambda x: -x[1])[:10])
                                       for k, v in self.pominiete_gdzie.items() if v},

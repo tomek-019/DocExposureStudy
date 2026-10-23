@@ -15,8 +15,9 @@ from pathlib import Path
 PROJEKT = "DocExposureStudy"                                 # nazwa projektu w User-Agencie
 # WERSJA: podbijać (1.1 -> 1.2), gdy zmiana wpływa na to, jakie żądania są wysyłane albo które pliki są
 # przyjmowane/pobierane (logika sieciowa common/discover/fetch). Bez podbicia: raporty, logi, extract,
-# klasyfikacja, summarize. Historia: 1.0 = pilot i testy do 2026-10-21; 1.1 (2026-10-22) = x-unknown przyjmowany.
-WERSJA = "1.1"
+# klasyfikacja, summarize. Historia: 1.0 = pilot i testy do 2026-10-21; 1.1 (2026-10-22) = x-unknown przyjmowany;
+# 1.2 (2026-10-23) = strony z sitemap w kolejce zapasowej (discover.py).
+WERSJA = "1.2"
 REPO_URL = "https://github.com/tomek-019/DocExposureStudy"   # publiczne repozytorium z README badania
 USER_AGENT = f"{PROJEKT}/{WERSJA} (+{REPO_URL})"
 
