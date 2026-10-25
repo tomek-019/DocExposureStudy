@@ -8,7 +8,8 @@ Logika jak w `meta2csv.py fetch` (v5), z trzema zmianami z modułu common:
   3. każde żądanie HTTP trafia do logu JSONL (domyślnie <out>_zadania.jsonl, obok katalogu plików).
 Dodatkowo: częściowo pobrany plik jest usuwany, gdy transfer przerwie błąd.
 Przekierowania (UA 1.3): każdy krok sprawdzany (wykluczenia, robots.txt celu, odstęp); z --domena także
-zakres (host = domena albo jej subdomena) — zalecane: zakres_domena z podsumowanie.json discover.
+zakres (host = jedna z domen albo jej subdomena; --domena można powtarzać) — zalecane: zakres_domeny
+z podsumowanie.json discover.
 
 Przykład:
   python3 fetch.py --urls urls.txt --out dane/inst01/pliki [--domena gmina-x.pl]
@@ -36,11 +37,11 @@ def cmd_fetch(a):
 
     zakres = None
     if a.domena:
-        dom = common.normalizuj_host(a.domena)
+        domeny = [common.normalizuj_host(d) for d in a.domena]
 
         def zakres(u):
             h = common.normalizuj_host(urllib.parse.urlsplit(u).netloc)
-            return h == dom or h.endswith("." + dom)
+            return any(h == d or h.endswith("." + d) for d in domeny)
 
     # log poza katalogiem plików — inaczej extract potraktowałby go jak dokument
     log = common.LogZadan(a.log or out.with_name(out.name + "_zadania.jsonl"))
@@ -75,7 +76,7 @@ def cmd_fetch(a):
                 print(f"[-] wykluczona domena: {url}", file=sys.stderr)
                 wiersz("", url, inst, ts, "wykluczona_domena"); continue
             if zakres and not zakres(url):
-                print(f"[-] poza zakresem {a.domena}: {url}", file=sys.stderr)
+                print(f"[-] poza zakresem {', '.join(a.domena)}: {url}", file=sys.stderr)
                 wiersz("", url, inst, ts, "poza_zakresem"); continue
             if not robots.wolno(url):
                 print(f"[-] robots.txt zabrania: {url}", file=sys.stderr)
@@ -131,7 +132,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--urls", required=True, help="plik tekstowy: 'URL' lub 'URL,instytucja' w linii; # = komentarz")
     p.add_argument("--out", required=True)
-    p.add_argument("--domena", help="zakres instytucji (domena + subdomeny); przekierowania poza nią są blokowane")
+    p.add_argument("--domena", action="append",
+                   help="zakres instytucji (domena + subdomeny; można powtarzać); przekierowania poza nim są blokowane")
     p.add_argument("--delay", type=float, default=common.MIN_ODSTEP_S,
                    help=f"sekundy między żądaniami do jednego hosta (min. {common.MIN_ODSTEP_S} poza hostami lokalnymi)")
     p.add_argument("--ua", default=common.USER_AGENT, help="User-Agent (domyślnie z common.py; zmiana tylko do testów)")
