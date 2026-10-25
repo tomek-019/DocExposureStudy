@@ -17,8 +17,9 @@ PROJEKT = "DocExposureStudy"                                 # nazwa projektu w 
 # przyjmowane/pobierane (logika sieciowa common/discover/fetch). Bez podbicia: raporty, logi, extract,
 # klasyfikacja, summarize. Historia: 1.0 = pilot i testy do 2026-10-21; 1.1 (2026-10-22) = x-unknown przyjmowany;
 # 1.2 (2026-10-23) = strony z sitemap w kolejce zapasowej (discover.py);
-# 1.3 (2026-10-25) = przekierowania ręcznie: robots.txt/zakres/wykluczenia/limiter dla każdego kroku.
-WERSJA = "1.3"
+# 1.3 (2026-10-25) = przekierowania ręcznie: robots.txt/zakres/wykluczenia/limiter dla każdego kroku;
+# 1.4 (2026-10-25) = dodatkowe domeny instytucji w discover (wspólny budżet, domeny naprzemiennie).
+WERSJA = "1.4"
 REPO_URL = "https://github.com/tomek-019/DocExposureStudy"   # publiczne repozytorium z README badania
 USER_AGENT = f"{PROJEKT}/{WERSJA} (+{REPO_URL})"
 
