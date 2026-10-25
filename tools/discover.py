@@ -109,7 +109,9 @@ class Crawler:
         host = common.normalizuj_host(urllib.parse.urlsplit(self.start).netloc)
         self.domena = common.normalizuj_host(a.domena) if a.domena else re.sub(r"^www\.", "", host)
         self.log = common.LogZadan(self.out / "zadania_discover.jsonl")
-        self.klient = common.Klient(a.ua, self.log, common.Limiter(a.delay), etap="discover")
+        # zakres i budżet przekazane do klienta: kontrola także dla kroków przekierowań (decyzja 2026-10-25)
+        self.klient = common.Klient(a.ua, self.log, common.Limiter(a.delay), etap="discover",
+                                    zakres=self.w_zakresie, limit_zadan=a.budzet)
         self.robots = common.Robots(self.klient)
         self.kolejka = deque()
         # kolejka zapasowa na strony z sitemap (decyzja 2026-10-23): duża sitemapa (np. aktualności) zapełniała
@@ -356,7 +358,7 @@ class Crawler:
             "glebokosc_max": self.a.glebokosc, "stron_html": self.n_stron, "sitemap_pobranych": self.n_sitemap,
             "sprawdzen_heurystyka": self.n_sprawdzen, "w_kolejce_niezbadane": len(self.kolejka),
             "w_kolejce_zapasowej_niezbadane": len(self.w_zapasie), "stron_z_kolejki_zapasowej": self.n_stron_z_zapasu,
-            "pominiete": self.pominiete,
+            "pominiete": self.pominiete, "przekierowania": self.klient.przekierowania,
             "pominiete_najczesciej": {k: dict(sorted(v.items(), key=lambda x: -x[1])[:10])
                                       for k, v in self.pominiete_gdzie.items() if v},
             "odrzucone_typy": odrzucone,
