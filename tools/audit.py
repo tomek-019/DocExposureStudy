@@ -11,7 +11,10 @@ Sprawdza:
   2. brak żądań do wykluczonych domen (gov.pl, PWr), także po przekierowaniu,
   3. odstęp między żądaniami do jednego hosta >= 5 s (koniec poprzedniego -> początek następnego),
   4. brak żądań do ścieżek zabronionych w robots.txt (na zapisanej migawce robots.txt z czasu crawla),
-  5. sygnały przeciążenia serwera (HTTP 429/503) — do wiadomości.
+  5. sygnały przeciążenia serwera (HTTP 429/503) — do wiadomości,
+  6. przekierowania na inny host (do wiadomości): od UA 1.3 każdy krok jest osobnym wpisem w logu (sprawdzanym
+     w pkt 1–4), zablokowane kroki mają pole "uwagi"; w logach sprzed 1.3 (pole url_koncowy) robots.txt hosta
+     docelowego nie był sprawdzany — raport podaje ich liczbę i hosty docelowe.
 Kod wyjścia 0 = wszystko OK, 1 = co najmniej jedno naruszenie.
 """
 import argparse, collections, json, sys, urllib.parse
@@ -96,6 +99,20 @@ def audytuj(katalog: Path, ua: str, online: bool):
             naruszenia["robots"].append(e["url"])
     # 5. sygnały przeciążenia
     przeciazenie = [e["url"] for e in zad if e.get("status") in (429, 503)]
+    # 6. przekierowania na inny host
+    przek = collections.Counter()
+    stare_cele = collections.Counter()
+    for e in zad:
+        if e.get("przekierowanie_do"):
+            przek["zablokowane: " + e["uwagi"] if e.get("uwagi") else "wykonane (krok sprawdzony)"] += 1
+        elif e.get("url_koncowy") and e.get("cel") != "robots":   # robots.txt wolno śledzić (RFC 9309)
+            a = common.normalizuj_host(urllib.parse.urlsplit(e["url"]).netloc)
+            b = common.normalizuj_host(urllib.parse.urlsplit(e["url_koncowy"]).netloc)
+            if a != b:
+                rodzaj = "www/bez www" if a.removeprefix("www.") == b.removeprefix("www.") else "inny host"
+                przek[f"przed 1.3, {rodzaj} (robots celu niesprawdzany)"] += 1
+                if rodzaj == "inny host":
+                    stare_cele[b] += 1
 
     rap = {
         "katalog": str(katalog),
@@ -109,6 +126,8 @@ def audytuj(katalog: Path, ua: str, online: bool):
         "przyklady_naruszen": {k: v[:5] for k, v in naruszenia.items()},
         "http_429_503": len(przeciazenie),
         "robots_niezweryfikowane_hosty": sorted(bez_migawki),
+        "przekierowania": dict(przek),
+        "przekierowania_przed_1_3_cele": dict(stare_cele.most_common(10)),
     }
     ok = not naruszenia and not bez_migawki
     return rap, ok
@@ -135,6 +154,10 @@ def main():
         for kat, przyk in rap["przyklady_naruszen"].items():
             for x in przyk:
                 print(f"    [{kat}] {x}")
+        if rap["przekierowania"]:
+            print(f"  przekierowania: {rap['przekierowania']}")
+            if rap["przekierowania_przed_1_3_cele"]:
+                print(f"    hosty docelowe (przed 1.3): {rap['przekierowania_przed_1_3_cele']}")
         if rap["robots_niezweryfikowane_hosty"]:
             print(f"  ! brak migawki robots.txt dla: {rap['robots_niezweryfikowane_hosty']} "
                   f"(stare logi? użyj --robots-online)")
