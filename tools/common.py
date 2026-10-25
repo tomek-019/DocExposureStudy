@@ -16,8 +16,9 @@ PROJEKT = "DocExposureStudy"                                 # nazwa projektu w 
 # WERSJA: podbijać (1.1 -> 1.2), gdy zmiana wpływa na to, jakie żądania są wysyłane albo które pliki są
 # przyjmowane/pobierane (logika sieciowa common/discover/fetch). Bez podbicia: raporty, logi, extract,
 # klasyfikacja, summarize. Historia: 1.0 = pilot i testy do 2026-10-21; 1.1 (2026-10-22) = x-unknown przyjmowany;
-# 1.2 (2026-10-23) = strony z sitemap w kolejce zapasowej (discover.py).
-WERSJA = "1.2"
+# 1.2 (2026-10-23) = strony z sitemap w kolejce zapasowej (discover.py);
+# 1.3 (2026-10-25) = przekierowania ręcznie: robots.txt/zakres/wykluczenia/limiter dla każdego kroku.
+WERSJA = "1.3"
 REPO_URL = "https://github.com/tomek-019/DocExposureStudy"   # publiczne repozytorium z README badania
 USER_AGENT = f"{PROJEKT}/{WERSJA} (+{REPO_URL})"
 
@@ -176,26 +177,61 @@ class Limiter:
 
 # ---------- klient HTTP z limiterem i logiem ----------
 
-class Klient:
-    def __init__(self, ua: str, log: LogZadan, limiter: Limiter, etap: str):
-        self.ua, self.log, self.limiter, self.etap = ua, log, limiter, etap
-        self.liczba_zadan = 0                      # do budżetu crawla
+class _BezPrzekierowan(urllib.request.HTTPRedirectHandler):
+    """urllib NIE podąża sam za przekierowaniami (3xx wraca jako HTTPError); Klient robi to ręcznie."""
 
-    def otworz(self, url: str, timeout: float, cel: str):
-        """Zwraca otwartą odpowiedź (context manager). Wywołujący MUSI wywołać zamknij() po odczycie."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_BezPrzekierowan)
+KODY_PRZEKIEROWAN = {301, 302, 303, 307, 308}
+MAX_PRZEKIEROWAN = 5
+
+
+class Klient:
+    """Każde żądanie: kontrola wykluczeń, limiter per host, log JSONL.
+    Przekierowania (decyzja 2026-10-25, UA 1.3) obsługiwane ręcznie, krok po kroku: każdy krok to osobne
+    żądanie w logu i w budżecie; przed krokiem: wykluczenia gov.pl/PWr, zakres (jeśli podany), robots.txt
+    hosta docelowego, odstęp 5 s. Wyjątek: robots.txt — przekierowania śledzone bez sprawdzania robots
+    (RFC 9309 §2.3.1.2), ale z kontrolą wykluczeń. Zablokowany krok -> PermissionError i wpis w logu."""
+
+    def __init__(self, ua: str, log: LogZadan, limiter: Limiter, etap: str, zakres=None, limit_zadan=None):
+        self.ua, self.log, self.limiter, self.etap = ua, log, limiter, etap
+        self.zakres = zakres                       # callable(url) -> bool albo None (bez kontroli zakresu)
+        self.limit_zadan = limit_zadan             # twardy limit żądań (budżet) albo None
+        self.robots = None                         # ustawiane przez Robots(klient)
+        self.liczba_zadan = 0                      # do budżetu crawla
+        self.przekierowania = {"wykonane": 0, "zablokowane_robots": 0, "zablokowane_zakres": 0,
+                               "zablokowane_wykluczona": 0, "zablokowane_limit": 0}
+
+    def _get(self, url, timeout, cel):
+        """Jedno żądanie bez podążania za przekierowaniem. Zwraca (odpowiedź|None, kod_3xx|None, Location)."""
         host = urllib.parse.urlsplit(url).netloc
         if host_wykluczony(host):
             raise PermissionError(f"wykluczona domena: {host}")
+        if self.limit_zadan is not None and self.liczba_zadan >= self.limit_zadan:
+            raise RuntimeError("osiągnięty limit żądań (budżet)")
         self.limiter.czekaj(host)
         self.liczba_zadan += 1
         t0 = time.monotonic()
         req = urllib.request.Request(do_uri(url), headers={"User-Agent": self.ua})
         try:
-            r = urllib.request.urlopen(req, timeout=timeout)
+            r = _OPENER.open(req, timeout=timeout)
         except urllib.error.HTTPError as e:
             self.limiter.oznacz(host)
-            self.log.zapisz(etap=self.etap, cel=cel, host=normalizuj_host(host), url=url, metoda="GET",
-                            status=e.code, ua=self.ua, czas_ms=int((time.monotonic() - t0) * 1000))
+            pola = dict(etap=self.etap, cel=cel, host=normalizuj_host(host), url=url, metoda="GET",
+                        status=e.code, ua=self.ua, czas_ms=int((time.monotonic() - t0) * 1000))
+            # czas zapisany teraz: wpis 3xx trafia do logu dopiero po decyzji (np. po pobraniu robots.txt celu)
+            pola["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"
+            pola["t_epoch"] = round(time.time(), 3)
+            loc = e.headers.get("Location") if e.code in KODY_PRZEKIEROWAN else None
+            if loc:
+                pola["przekierowanie_do"] = urllib.parse.urljoin(url, loc)
+            e.close()
+            if loc:
+                return None, e.code, pola
+            self.log.zapisz(**pola)
             raise
         except Exception as e:
             self.limiter.oznacz(host)
@@ -203,20 +239,47 @@ class Klient:
                             status=None, blad=str(e), ua=self.ua, czas_ms=int((time.monotonic() - t0) * 1000))
             raise
         r._mls = (host, url, cel, t0)
-        return r
+        return r, None, None
+
+    def otworz(self, url: str, timeout: float, cel: str):
+        """Zwraca otwartą odpowiedź (po ewentualnych przekierowaniach). Wywołujący MUSI wywołać zamknij().
+        r.geturl() = adres końcowy; r._url_poczatkowy = adres, o który prosił wywołujący."""
+        poczatkowy, biezacy = url, url
+        for krok in range(MAX_PRZEKIEROWAN + 1):
+            r, kod, pola = self._get(biezacy, timeout, cel)
+            if r is not None:
+                r._url_poczatkowy = poczatkowy
+                return r
+            cel_url = pola["przekierowanie_do"]
+            blokada = None
+            if krok == MAX_PRZEKIEROWAN:
+                blokada = ("zablokowane_limit", f"więcej niż {MAX_PRZEKIEROWAN} przekierowań")
+            elif host_wykluczony(urllib.parse.urlsplit(cel_url).netloc):
+                blokada = ("zablokowane_wykluczona", "przekierowanie do wykluczonej domeny")
+            elif cel != "robots" and self.zakres is not None and not self.zakres(cel_url):
+                blokada = ("zablokowane_zakres", "przekierowanie poza zakres")
+            if blokada is None and cel != "robots" and self.robots is not None \
+                    and not self.robots.wolno(cel_url):
+                blokada = ("zablokowane_robots", "robots.txt celu przekierowania zabrania")
+            if blokada:
+                self.przekierowania[blokada[0]] += 1
+                pola["uwagi"] = blokada[1]
+                self.log.zapisz(**pola)
+                raise PermissionError(f"{blokada[1]}: {cel_url}")
+            self.log.zapisz(**pola)
+            self.przekierowania["wykonane"] += 1
+            biezacy = cel_url
+        raise RuntimeError("nieosiągalne")
 
     def zamknij(self, r, bajty=None, uwagi=None):
         host, url, cel, t0 = r._mls
-        final = r.geturl()
         r.close()
         self.limiter.oznacz(host)
         pola = dict(etap=self.etap, cel=cel, host=normalizuj_host(host), url=url, metoda="GET",
                     status=r.status, ua=self.ua, czas_ms=int((time.monotonic() - t0) * 1000),
                     content_type=r.headers.get("Content-Type"), bajty=bajty)
-        if final != url:
-            pola["url_koncowy"] = final
-            if host_wykluczony(urllib.parse.urlsplit(final).netloc):
-                pola["uwagi"] = "przekierowanie do wykluczonej domeny"
+        if getattr(r, "_url_poczatkowy", url) != url:
+            pola["url_poczatkowy"] = r._url_poczatkowy
         if uwagi:
             pola["uwagi"] = uwagi
         self.log.zapisz(**pola)
@@ -344,6 +407,7 @@ class Robots:
     def __init__(self, klient: Klient):
         self.klient = klient
         self._cache = {}
+        klient.robots = self                       # Klient sprawdza robots.txt celu przekierowania
 
     def parser(self, base: str) -> "ZasadyRobots":
         if base in self._cache:
