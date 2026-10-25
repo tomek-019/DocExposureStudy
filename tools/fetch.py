@@ -7,9 +7,11 @@ Logika jak w `meta2csv.py fetch` (v5), z trzema zmianami z modułu common:
   2. odstęp min. 5 s liczony per host i obejmujący także żądanie o robots.txt,
   3. każde żądanie HTTP trafia do logu JSONL (domyślnie <out>_zadania.jsonl, obok katalogu plików).
 Dodatkowo: częściowo pobrany plik jest usuwany, gdy transfer przerwie błąd.
+Przekierowania (UA 1.3): każdy krok sprawdzany (wykluczenia, robots.txt celu, odstęp); z --domena także
+zakres (host = domena albo jej subdomena) — zalecane: zakres_domena z podsumowanie.json discover.
 
 Przykład:
-  python3 fetch.py --urls urls.txt --out dane/inst01/pliki
+  python3 fetch.py --urls urls.txt --out dane/inst01/pliki [--domena gmina-x.pl]
   (User-Agent z common.py; --ua tylko do testów)
 """
 import argparse, csv, hashlib, re, sys, time, urllib.parse
@@ -32,9 +34,17 @@ def cmd_fetch(a):
             sys.exit("[x] User-Agent nie jest skonfigurowany (PROJEKT/REPO_URL w common.py). "
                      "Bez tego nie pobieram z hostów zewnętrznych.")
 
+    zakres = None
+    if a.domena:
+        dom = common.normalizuj_host(a.domena)
+
+        def zakres(u):
+            h = common.normalizuj_host(urllib.parse.urlsplit(u).netloc)
+            return h == dom or h.endswith("." + dom)
+
     # log poza katalogiem plików — inaczej extract potraktowałby go jak dokument
     log = common.LogZadan(a.log or out.with_name(out.name + "_zadania.jsonl"))
-    klient = common.Klient(a.ua, log, common.Limiter(a.delay), etap="fetch")
+    klient = common.Klient(a.ua, log, common.Limiter(a.delay), etap="fetch", zakres=zakres)
     robots = common.Robots(klient)
 
     man_path = out / "manifest.csv"
@@ -64,6 +74,9 @@ def cmd_fetch(a):
             if common.url_wykluczony(url):
                 print(f"[-] wykluczona domena: {url}", file=sys.stderr)
                 wiersz("", url, inst, ts, "wykluczona_domena"); continue
+            if zakres and not zakres(url):
+                print(f"[-] poza zakresem {a.domena}: {url}", file=sys.stderr)
+                wiersz("", url, inst, ts, "poza_zakresem"); continue
             if not robots.wolno(url):
                 print(f"[-] robots.txt zabrania: {url}", file=sys.stderr)
                 wiersz("", url, inst, ts, "robots_disallow"); continue
@@ -109,12 +122,16 @@ def cmd_fetch(a):
             except Exception as e:
                 wiersz("", url, inst, ts, f"error: {e}")
                 print(f"[!] {url}: {e}", file=sys.stderr)
+    p = klient.przekierowania
+    if any(p.values()):
+        print(f"[i] przekierowania: {p}", file=sys.stderr)
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--urls", required=True, help="plik tekstowy: 'URL' lub 'URL,instytucja' w linii; # = komentarz")
     p.add_argument("--out", required=True)
+    p.add_argument("--domena", help="zakres instytucji (domena + subdomeny); przekierowania poza nią są blokowane")
     p.add_argument("--delay", type=float, default=common.MIN_ODSTEP_S,
                    help=f"sekundy między żądaniami do jednego hosta (min. {common.MIN_ODSTEP_S} poza hostami lokalnymi)")
     p.add_argument("--ua", default=common.USER_AGENT, help="User-Agent (domyślnie z common.py; zmiana tylko do testów)")
