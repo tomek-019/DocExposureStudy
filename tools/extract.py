@@ -34,6 +34,10 @@ PERSON_TAGS = re.compile(
 )
 # Wyjątki: pola o tej nazwie, które w danej grupie zawierają nazwę aplikacji, nie osobę.
 NOT_PERSON = {"PDF:Creator"}  # w słowniku Info PDF /Creator = aplikacja źródłowa
+# Wyjątek warunkowy (decyzja 2026-10-27, opcja B): zwykle program, nie osoba — Adobe DSC 3.0: %%Creator to
+# „usually the name of the document composition software”; XMP-pdf:Creator spoza specyfikacji XMP, w danych program.
+# Pseudonimizowane tylko wtedy, gdy reguła typu rozpozna osobę; w przeciwnym razie wartość zostaje jawna.
+WARUNKOWE = {"PostScript:Creator", "XMP-pdf:Creator"}
 
 
 def czy_osobowy(klucz: str) -> bool:
@@ -413,6 +417,7 @@ def cmd_extract(a):
 
     rows, long_rows, all_cols = [], [], set()
     zip_warn = False
+    n_warunkowe_jawne = 0                       # wartości z WARUNKOWE pozostawione jawnie (typ inny niż osoba)
     for d in data:
         src = Path(d.get("SourceFile", ""))
         rel = src.relative_to(indir).as_posix() if src.is_absolute() or str(src).startswith(str(indir)) else src.name
@@ -442,7 +447,11 @@ def cmd_extract(a):
             if k.startswith(DROP_PREFIXES):
                 continue
             s = to_str(v)
-            if s and czy_osobowy(k):
+            if s and czy_osobowy(k) and k in WARUNKOWE and typ_wartosci(s) != "osoba":
+                s, ch = scrub_text(key, s)               # program: zostaje jawny (e-maile/ścieżki nadal czyszczone)
+                if ch: pseud_fields.append(k)
+                n_warunkowe_jawne += 1
+            elif s and czy_osobowy(k):
                 typy[k] = typ_wartosci(s)               # przed pseudonimizacją, potem wartość znika
                 s = pseud(key, s, "P"); pseud_fields.append(k)
             else:
@@ -467,6 +476,9 @@ def cmd_extract(a):
         if not a.allow_missing_zip:
             sys.exit(2)
 
+    if n_warunkowe_jawne:
+        print(f"[i] {n_warunkowe_jawne} wartości z {sorted(WARUNKOWE)} pozostawiono jawnie (typ inny niż osoba)",
+              file=sys.stderr)
     if licznik_zdekodowanych:
         print(f"[i] zdekodowano {licznik_zdekodowanych} wartości zapisanych jako napis PDF (UTF-16 ósemkowo)",
               file=sys.stderr)
