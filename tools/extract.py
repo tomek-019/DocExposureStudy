@@ -68,7 +68,8 @@ ORG_RE = re.compile(
     r"rad(a|y|zie|ę)\b|fundacj|stowarzysz|sp[oó][lł]k|sp[oó][lł]dziel|university|office\b|department|"
     r"ochron[aay]\s+[śs]rodowisk|kadr[ya]?\b|ksi[eę]gowo[śs]|promocj|sekcj|zarz[aą]d\b|redakcj|"
     # stanowiska (decyzja 2026-10-27, opcja A): wartość opisuje urząd, nie osobę — typ „organizacja”
-    r"burmistrz|w[oó]jt|starost|prezydent|dyrektor|kierownik|so[lł]tys|prezes|sekretarz|skarbnik)"
+    # „wójt” tylko jako całe słowo (z odmianą): bez tego „wojtek.xxx” (login z imieniem) wpadał w organizację
+    r"burmistrz|w[oó]jt(a|em|owi|ów|y)?\b|starost|prezydent|dyrektor|kierownik|so[lł]tys|prezes|sekretarz|skarbnik)"
     r"|\bsp\.?\s*z\s*o\.?\s*o\b|\bs\.\s?a\.?(\s|$)|\b(ltd|inc|gmbh|llc|corp)\b\.?"
     r"|www\.|\.(pl|com|eu|org|net|edu)\b"
 )
@@ -146,10 +147,30 @@ def typy_czesci(czesc: str) -> list:
     return ["organizacja"] + ([typ_czesci(reszta)] if reszta else [])
 
 
+SEP_CZESCI_RE = re.compile(r"\s+\|\s+|;|\s+[-–—]\s+")
+
+
+def podziel_poza_nawiasami(value: str) -> list:
+    """Dzieli wartość separatorami części (SEP_CZESCI_RE), pomijając fragmenty w nawiasach () i []."""
+    glebokosc, maska = 0, []
+    for c in value:                       # maska: znaki w nawiasach zastąpione „x”, długość bez zmian
+        if c in "([":
+            glebokosc += 1
+        elif c in ")]" and glebokosc:
+            glebokosc -= 1
+            maska.append(c); continue
+        maska.append("x" if glebokosc and c not in "([" else c)
+    czesci, start = [], 0
+    for m in SEP_CZESCI_RE.finditer("".join(maska)):
+        czesci.append(value[start:m.start()]); start = m.end()
+    return czesci + [value[start:]]
+
+
 def typ_wartosci(value: str) -> str:
     """osoba / login / email / organizacja / zaslepka / nieustalone dla prawdziwej wartości pola osobowego."""
-    # części: „A | B”, „A; B”, „A - B” (myślnik ze spacjami, np. „Kowalska - Nowak”, „Jan Kowalski - stock.adobe.com”)
-    czesci = [c for c in re.split(r"\s+\|\s+|;|\s+[-–—]\s+", value) if c.strip(SEPARATORY)] or [value]
+    # części: „A | B”, „A; B”, „A - B” (myślnik ze spacjami, np. „Kowalska - Nowak”, „Jan Kowalski - stock.adobe.com”);
+    # dzielone tylko POZA nawiasami — „Jan Kowalski (C:\X\A - B.doc)” zostaje jedną częścią
+    czesci = [c for c in podziel_poza_nawiasami(value) if c.strip(SEPARATORY)] or [value]
     return max((t for c in czesci for t in typy_czesci(c)), key=TYPY_RANGA.get)
 
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
