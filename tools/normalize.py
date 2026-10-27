@@ -8,19 +8,23 @@ Dla każdego pola kanonicznego:
   - <pole>_zrodlo = tag, z którego wzięto wartość,
   - <pole>_rozbiezne = 1, gdy inne źródło tego pola ma inną wartość (różnice samego zapisu się nie liczą).
 Daty: <pole>_lokalna (czas zapisany w pliku), <pole>_utc (gdy znana strefa), <pole>_strefa (przesunięcie
-albo "brak"). Wartości osobowe pozostają pseudonimami z extract.py.
+albo "brak"). Wartości osobowe pozostają pseudonimami z extract.py; dla pól osobowych (POLA_OSOBOWE)
+<pole>_typ = typ wartości z extract.py (osoba/login/email/organizacja/zaslepka/nieustalone) dla wybranego źródła.
 
 Kontrola kompletności: każdy niepusty tag musi być zmapowany albo jawnie ignorowany (IGNOROWANE);
 pozostałe są zgłaszane jako NIEZNANE (konsola + opcjonalnie --raport JSON). Kod wyjścia 3, gdy są nieznane.
 
 Przykład:
-  python3 tools/normalize.py --long dane/pilot/wyniki_long.csv --szeroki dane/pilot/wyniki.csv \
+  python3 tools/normalize.py --long dane/pilot/wyniki_long.csv --szeroki dane/pilot/wyniki.csv \\
                              --out dane/pilot/dokumenty.csv --raport dane/pilot/normalize_raport.json
 """
 import argparse, collections, csv, datetime as dt, fnmatch, json, re, sys
 from pathlib import Path
 
-WERSJA_MAPY = "1.1"   # 1.1 (2026-10-22): id_poprzednika i numer_seryjny_wewnetrzny jako osobne pola
+# 1.1 (2026-10-22): id_poprzednika i numer_seryjny_wewnetrzny jako osobne pola
+# 1.2 (2026-10-27): XMP-pdf:Creator i PostScript:Creator -> program_tworzacy (wyjątek warunkowy w extract.py);
+#                   kolumny <pole>_typ dla pól osobowych (typ wartości z extract.py)
+WERSJA_MAPY = "1.2"
 
 # Grupy notatek producenta (MakerNotes): z nich bierzemy tylko numery seryjne, właściciela i firmware.
 MN = ["Canon", "CanonCustom", "Nikon", "NikonCustom", "FujiFilm", "Samsung", "Olympus", "Sony", "Panasonic",
@@ -43,8 +47,9 @@ MAPA = [
     ("wlasciciel_urzadzenia", "tekst", ["ExifIFD:OwnerName", "XMP-aux:OwnerName", *mn("OwnerName")]),
     ("firma", "tekst", ["XML:Company", "FlashPix:Company"]),
     # oprogramowanie i system
-    ("program_tworzacy", "tekst", ["PDF:Creator", "XMP-xmp:CreatorTool", "XML:Application", "FlashPix:Software",
-                                   "IFD0:Software", "PNG:Software", "XMP-illustrator:CreatorSubTool"]),
+    ("program_tworzacy", "tekst", ["PDF:Creator", "XMP-xmp:CreatorTool", "XMP-pdf:Creator", "XML:Application",
+                                   "FlashPix:Software", "IFD0:Software", "PNG:Software",
+                                   "XMP-illustrator:CreatorSubTool", "PostScript:Creator"]),
     ("program_pdf", "tekst", ["PDF:Producer", "XMP-pdf:Producer"]),
     ("wersja_aplikacji", "tekst", ["XML:AppVersion", "FlashPix:AppVersion"]),
     ("program_edycji_obrazu", "tekst", ["IFD0:ProcessingSoftware"]),
@@ -96,6 +101,13 @@ MAPA = [
     ("gps_dl", "tekst", ["GPS:GPSLongitude", "Composite:GPSLongitude", "XMP-exif:GPSLongitude"]),
     ("gps_data", "tekst", ["Composite:GPSDateTime"]),
 ]
+
+# Pola osobowe: obok wartości (pseudonimu) zapisywany typ wartości z extract.py (decyzja A7, mapa 1.2).
+POLA_OSOBOWE = ("autor", "ostatnio_zapisal", "prawa_autorskie", "wlasciciel_urzadzenia")
+# Źródła programu objęte w extract.py wyjątkiem warunkowym: gdy reguła rozpoznała osobę, wartość jest
+# pseudonimem i NIE może trafić do program_tworzacy (dziennik 2026-10-27).
+ZRODLA_WARUNKOWE = {"PostScript:Creator", "XMP-pdf:Creator"}
+PSEUDONIM_RE = re.compile(r"^P-[0-9a-f]{10}$")
 
 # ---------- IGNOROWANE (jawna lista; wzorce fnmatch na "Grupa:Tag") ----------
 IGNOROWANE = [
@@ -151,7 +163,7 @@ IGNOROWANE = [
     "XMP-GIMP:Api", "XMP-GIMP:TimeStamp", "XMP-GIMP:Version",
     "IPTC:CodedCharacterSet", "IPTC:ApplicationRecordVersion", "IPTC:EnvelopeRecordVersion",
     "IPTC:DateCreated", "IPTC:TimeCreated", "IPTC:DigitalCreationDate", "IPTC:DigitalCreationTime",
-    "PostScript:Creator", "PostScript:AI*", "PostScript:BoundingBox",
+    "PostScript:AI*", "PostScript:BoundingBox",          # 1.2: PostScript:Creator przeniesiony do program_tworzacy
 ]
 
 # Formaty z listy badania (decyzja 2026-10-18) wg File:FileType; inne (np. XML/XHTML z ZIP-ów sprzed filtra)
@@ -258,8 +270,10 @@ def rozbiezne(rodzaj, wartosci):
     return any(not takie_same(rodzaj, wartosci[0], w) for w in wartosci[1:])
 
 
-def normalizuj_plik(tagi):
-    """tagi: {'Grupa:Tag': wartość}. -> (wiersz z polami kanonicznymi, set zmapowanych kluczy)."""
+def normalizuj_plik(tagi, typy=None):
+    """tagi: {'Grupa:Tag': wartość}; typy: {'Grupa:Tag': typ wartości z extract.py}.
+    -> (wiersz z polami kanonicznymi, set zmapowanych kluczy)."""
+    typy = typy or {}
     wiersz, uzyte = {}, set()
     for pole, rodzaj, zrodla in MAPA:
         kand = []                                  # [(klucz, wartość)] w kolejności priorytetu
@@ -269,6 +283,9 @@ def normalizuj_plik(tagi):
                     kand.append((k, tagi[k]))
         uzyte.update(k for k, _ in kand)
         kand = [(k, v) for k, v in kand if v.strip() not in PUSTE]
+        if pole == "program_tworzacy":
+            # wyjątek warunkowy (extract.py): pseudonim = rozpoznana osoba, nie program
+            kand = [(k, v) for k, v in kand if not (k in ZRODLA_WARUNKOWE and PSEUDONIM_RE.match(v.strip()))]
         wybor = kand[0] if kand else None
         if wybor and rodzaj == "tekst":
             # decyzja 2026-10-23: gdy wartość z priorytetu zawiera się w innej, bierzemy pełniejszą (dłuższą);
@@ -290,6 +307,8 @@ def normalizuj_plik(tagi):
         else:
             wiersz[pole] = wybor[1].strip() if wybor else ""
         wiersz[f"{pole}_zrodlo"] = wybor[0] if wybor else ""
+        if pole in POLA_OSOBOWE:
+            wiersz[f"{pole}_typ"] = typy.get(wybor[0], "") if wybor else ""
         if len(zrodla) > 1:
             wiersz[f"{pole}_rozbiezne"] = roz
     return wiersz, uzyte
@@ -303,6 +322,8 @@ def kolumny_pol():
         else:
             k.append(pole)
         k.append(f"{pole}_zrodlo")
+        if pole in POLA_OSOBOWE:
+            k.append(f"{pole}_typ")
         if len(zrodla) > 1:
             k.append(f"{pole}_rozbiezne")
     return k
@@ -316,12 +337,16 @@ def main():
     ap.add_argument("--raport", help="raport JSON: nieznane tagi, rozbieżności, pominięte formaty")
     a = ap.parse_args()
 
-    pliki = collections.OrderedDict()                # plik -> {"meta": {...}, "tagi": {...}}
+    pliki = collections.OrderedDict()                # plik -> {"meta": {...}, "tagi": {...}, "typy": {...}}
     with open(a.long, encoding="utf-8-sig", newline="") as f:
         for r in csv.DictReader(f):
-            p = pliki.setdefault(r["plik"], {"meta": {"url": r["url"], "instytucja": r["instytucja"]}, "tagi": {}})
+            p = pliki.setdefault(r["plik"], {"meta": {"url": r["url"], "instytucja": r["instytucja"]},
+                                             "tagi": {}, "typy": {}})
             if r["wartosc"].strip():
-                p["tagi"][f"{r['grupa']}:{r['tag']}"] = r["wartosc"]
+                k = f"{r['grupa']}:{r['tag']}"
+                p["tagi"][k] = r["wartosc"]
+                if r.get("typ_wartosci"):            # kolumna od extract.py z 2026-10-26; starsze CSV jej nie mają
+                    p["typy"][k] = r["typ_wartosci"]
     meta_s = {}
     if a.szeroki:
         with open(a.szeroki, encoding="utf-8-sig", newline="") as f:
@@ -331,12 +356,13 @@ def main():
     wyniki, pominiete = [], collections.Counter()
     nieznane = collections.defaultdict(lambda: {"pliki": 0, "instytucje": set(), "przyklad": ""})
     rozb = collections.Counter()
+    typy_autora = collections.Counter()
     for plik, d in pliki.items():
         fmt = d["tagi"].get("File:FileType", "")
         if fmt not in FORMATY:
             pominiete[fmt or "(brak FileType)"] += 1
             continue
-        w, uzyte = normalizuj_plik(d["tagi"])
+        w, uzyte = normalizuj_plik(d["tagi"], d["typy"])
         for k, v in d["tagi"].items():
             if k in uzyte or pasuje(k, IGNOROWANE):
                 continue
@@ -345,6 +371,7 @@ def main():
         for k, v in w.items():
             if k.endswith("_rozbiezne") and v:
                 rozb[k[:-len("_rozbiezne")]] += 1
+        typy_autora[w.get("autor_typ") or ("(brak autora)" if not w.get("autor") else "(brak typu)")] += 1
         w["n_pol_kanonicznych"] = sum(1 for pole, rodzaj, _ in MAPA
                                       if pole != "format" and (w.get(pole) not in ("", None) if rodzaj != "data"
                                                                else w.get(f"{pole}_lokalna") or w.get(f"{pole}_surowa")))
@@ -361,6 +388,8 @@ def main():
     print(f"[+] {len(wyniki)} dokumentów -> {a.out} (mapa v{WERSJA_MAPY}, {len(kol)} kolumn)", file=sys.stderr)
     if pominiete:
         print(f"[i] pominięte (format spoza listy): {dict(pominiete)}", file=sys.stderr)
+    print("[i] typ autora (dokumenty): " + ", ".join(f"{k}={v}" for k, v in typy_autora.most_common()),
+          file=sys.stderr)
     print("[i] rozbieżności między źródłami (pole: dokumenty): " +
           (", ".join(f"{k}={v}" for k, v in rozb.most_common()) or "brak"), file=sys.stderr)
     if nieznane:
@@ -372,7 +401,7 @@ def main():
     if a.raport:
         Path(a.raport).write_text(json.dumps({
             "wersja_mapy": WERSJA_MAPY, "dokumentow": len(wyniki), "pominiete_formaty": dict(pominiete),
-            "rozbieznosci": dict(rozb),
+            "typy_autora": dict(typy_autora), "rozbieznosci": dict(rozb),
             "nieznane": {k: {"pliki": n["pliki"], "instytucje": sorted(n["instytucje"]), "przyklad": n["przyklad"]}
                          for k, n in nieznane.items()},
         }, ensure_ascii=False, indent=2), encoding="utf-8")
