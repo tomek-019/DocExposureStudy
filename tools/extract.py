@@ -464,7 +464,12 @@ def cmd_extract(a):
                 n_warunkowe_jawne += 1
             elif s and czy_osobowy(k):
                 typy[k] = typ_wartosci(s)               # przed pseudonimizacją, potem wartość znika
-                s = pseud(key, s, "P"); pseud_fields.append(k)
+                m = EMAIL_RE.fullmatch(s.strip())
+                if m:   # sam adres (decyzja 2026-10-27): jak w scrub_text — część lokalna pseudonimem, domena jawna
+                    s = f"{pseud(key, m.group(1), 'E')}@{m.group(2)}"
+                else:   # wszystko inne, także adres z dopiskiem (np. „Jan Kowalski <jan@x.pl>”) -> całość pseudonimem
+                    s = pseud(key, s, "P")
+                pseud_fields.append(k)
             else:
                 s, ch = scrub_text(key, s)
                 if ch: pseud_fields.append(k)
