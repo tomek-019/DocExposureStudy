@@ -509,6 +509,10 @@ def cmd_extract(a):
         else:
             m = manifest.get(src.name) or manifest.get(rel) or {}
             url = m.get("url", "")
+        # klucz pliku w wynikach: <instytucja>/<ścieżka> (2026-10-27) — fetch numeruje pliki od 0000 w każdej
+        # instytucji, więc przy jednym wyniki.csv dla całej próby sama nazwa mogłaby się powtórzyć i nadpisać wiersz
+        inst = m.get("instytucja", "")
+        rel = f"{inst}/{rel}" if inst else rel
         row = {
             "plik": rel,
             "sha256": hashlib.sha256(src.read_bytes()).hexdigest(),
