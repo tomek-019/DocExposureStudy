@@ -24,7 +24,9 @@ from pathlib import Path
 # 1.1 (2026-10-22): id_poprzednika i numer_seryjny_wewnetrzny jako osobne pola
 # 1.2 (2026-10-27): XMP-pdf:Creator i PostScript:Creator -> program_tworzacy (wyjątek warunkowy w extract.py);
 #                   kolumny <pole>_typ dla pól osobowych (typ wartości z extract.py)
-WERSJA_MAPY = "1.2"
+# 1.3 (2026-10-27): 262 nieznane tagi z pełnej próby: nowe źródła istniejących pól (na końcu list priorytetów),
+#                   kolumna „znaczniki” (systemy i usługi po nazwach tagów, bez wartości), rozszerzone IGNOROWANE
+WERSJA_MAPY = "1.3"
 
 # Grupy notatek producenta (MakerNotes): z nich bierzemy tylko numery seryjne, właściciela i firmware.
 MN = ["Canon", "CanonCustom", "Nikon", "NikonCustom", "FujiFilm", "Samsung", "Olympus", "Sony", "Panasonic",
@@ -41,56 +43,72 @@ def mn(tag):
 MAPA = [
     # osoby i organizacje (pseudonimy, poza firma)
     ("autor", "tekst", ["PDF:Author", "XMP-dc:Creator", "XML:Creator", "FlashPix:Author", "IFD0:Artist",
-                        "IFD0:XPAuthor", "IPTC:By-line", "XML:EL_Author", "PostScript:For"]),
-    ("ostatnio_zapisal", "tekst", ["XML:LastModifiedBy", "FlashPix:LastModifiedBy", "PDF:LastSavedBy"]),
-    ("prawa_autorskie", "tekst", ["IFD0:Copyright", "IPTC:CopyrightNotice", "XMP-dc:Rights"]),
+                        "IFD0:XPAuthor", "IPTC:By-line", "XML:EL_Author", "PostScript:For",
+                        "XMP-pdf:Author", "XMP-xmp:Author", "XMP-meta:Initial-creator"]),
+    ("ostatnio_zapisal", "tekst", ["XML:LastModifiedBy", "FlashPix:LastModifiedBy", "PDF:LastSavedBy", "MS-DOC:LastSavedBy"]),
+    ("prawa_autorskie", "tekst", ["IFD0:Copyright", "IPTC:CopyrightNotice", "XMP-dc:Rights", "IPTC:Credit",
+                                   "XMP-photoshop:Credit", "XMP-pur:CreditLine", "XMP-xmpRights:WebStatement"]),
     ("wlasciciel_urzadzenia", "tekst", ["ExifIFD:OwnerName", "XMP-aux:OwnerName", *mn("OwnerName")]),
-    ("firma", "tekst", ["XML:Company", "FlashPix:Company"]),
+    ("firma", "tekst", ["XML:Company", "FlashPix:Company", "PDF:Company", "XMP-pdfx:Company"]),
     # oprogramowanie i system
     ("program_tworzacy", "tekst", ["PDF:Creator", "XMP-xmp:CreatorTool", "XMP-pdf:Creator", "XML:Application",
                                    "FlashPix:Software", "IFD0:Software", "PNG:Software",
-                                   "XMP-illustrator:CreatorSubTool", "PostScript:Creator"]),
+                                   "XMP-illustrator:CreatorSubTool", "PostScript:Creator", "XMP-meta:Generator",
+                                   "XML:Producer"]),
     ("program_pdf", "tekst", ["PDF:Producer", "XMP-pdf:Producer"]),
     ("wersja_aplikacji", "tekst", ["XML:AppVersion", "FlashPix:AppVersion"]),
     ("program_edycji_obrazu", "tekst", ["IFD0:ProcessingSoftware"]),
     ("biblioteka_xmp", "tekst", ["XMP-x:XMPToolkit"]),
     ("system", "tekst", ["FlashPix:System", "XMP-GIMP:Platform"]),
-    ("szablon", "tekst", ["XML:Template", "FlashPix:Template", "XML:ELDocType"]),
+    ("szablon", "tekst", ["XML:Template", "FlashPix:Template", "XML:ELDocType", "XMP-meta:TemplateHref"]),
     ("wersja_pdf", "tekst", ["PDF:PDFVersion", "XMP-pdf:PDFVersion"]),
     # urządzenia
-    ("urzadzenie_producent", "tekst", ["IFD0:Make"]),
-    ("urzadzenie_model", "tekst", ["IFD0:Model"]),
-    ("numer_seryjny", "tekst", ["ExifIFD:SerialNumber", "XMP-aux:SerialNumber", *mn("SerialNumber")]),
+    ("urzadzenie_producent", "tekst", ["IFD0:Make", "XMP-photoshop:CameraProfilesMake"]),
+    ("urzadzenie_model", "tekst", ["IFD0:Model", "XMP-photoshop:CameraProfilesModel", "IFD0:HostComputer"]),
+    ("numer_seryjny", "tekst", ["ExifIFD:SerialNumber", "XMP-aux:SerialNumber", *mn("SerialNumber"),
+                                "XMP-exifEX:SerialNumber", "XMP-microsoft:CameraSerialNumber"]),
     ("numer_seryjny_wewnetrzny", "tekst", [*mn("InternalSerialNumber")]),
-    ("obiektyw", "tekst", ["ExifIFD:LensModel", "XMP-aux:Lens", "XMP-exifEX:LensModel", "Composite:LensID"]),
+    ("obiektyw", "tekst", ["ExifIFD:LensModel", "XMP-aux:Lens", "XMP-exifEX:LensModel", "Composite:LensID",
+                          "XMP-microsoft:LensModel", "XMP-photoshop:CameraProfilesLens"]),
     ("firmware", "tekst", ["XMP-aux:Firmware", *mn("FirmwareVersion")]),
     # daty
     ("data_utworzenia", "data", ["PDF:CreateDate", "XML:CreateDate", "MS-DOC:CreateDate", "FlashPix:CreateDate",
                                  "ExifIFD:DateTimeOriginal", "ExifIFD:CreateDate", "XMP-xmp:CreateDate",
-                                 "XMP-photoshop:DateCreated", "Composite:DateTimeCreated", "PostScript:CreateDate"]),
+                                 "XMP-photoshop:DateCreated", "Composite:DateTimeCreated", "PostScript:CreateDate",
+                                 "XMP-pdf:CreationDate", "XML:Created", "XMP-meta:Creation-date",
+                                 "XMP-exif:DateTimeOriginal"]),
     ("data_modyfikacji", "data", ["PDF:ModifyDate", "XML:ModifyDate", "MS-DOC:ModifyDate", "FlashPix:ModifyDate",
-                                  "IFD0:ModifyDate", "XMP-xmp:ModifyDate"]),
+                                  "IFD0:ModifyDate", "XMP-xmp:ModifyDate", "XMP-pdf:ModDate", "XML:LastSaved",
+                                  "PDF:SourceModified", "XMP-pdfx:SourceModified"]),
     ("data_metadanych", "data", ["XMP-xmp:MetadataDate"]),
-    ("data_wydruku", "data", ["XML:LastPrinted", "MS-DOC:LastPrinted", "FlashPix:LastPrinted", "PDF:DateLastPrinted"]),
+    ("data_wydruku", "data", ["XML:LastPrinted", "MS-DOC:LastPrinted", "FlashPix:LastPrinted", "PDF:DateLastPrinted",
+                              "XMP-meta:Print-date"]),
     # aktywność
-    ("czas_edycji_min", "minuty", ["XML:TotalEditTime", "MS-DOC:TotalEditTime", "FlashPix:TotalEditTime"]),
-    ("liczba_rewizji", "liczba", ["XML:RevisionNumber", "MS-DOC:RevisionNumber", "FlashPix:RevisionNumber"]),
+    ("czas_edycji_min", "minuty", ["XML:TotalEditTime", "MS-DOC:TotalEditTime", "FlashPix:TotalEditTime",
+                                   "XMP-meta:Editing-duration"]),
+    ("liczba_rewizji", "liczba", ["XML:RevisionNumber", "MS-DOC:RevisionNumber", "FlashPix:RevisionNumber",
+                                  "XMP-meta:Editing-cycles"]),
     # treść w metadanych (jawna)
-    ("tytul", "tekst", ["PDF:Title", "XMP-dc:Title", "XMP-dc:Title-*", "FlashPix:Title", "PostScript:Title"]),
-    ("temat", "tekst", ["PDF:Subject", "XMP-dc:Description", "IFD0:ImageDescription"]),
-    ("slowa_kluczowe", "tekst", ["PDF:Keywords", "XML:Keywords", "XMP-pdf:Keywords"]),
-    ("komentarz", "tekst", ["File:Comment", "IPTC:SpecialInstructions"]),
-    ("linki", "tekst", ["XML:HLinks"]),
-    ("jezyk", "tekst", ["PDF:Language", "XMP-dc:Language", "XML:Language", "FlashPix:LanguageCode"]),
+    ("tytul", "tekst", ["PDF:Title", "XMP-dc:Title", "XMP-dc:Title-*", "FlashPix:Title", "PostScript:Title",
+                        "XMP-pdf:Title", "XMP-xmp:Title", "IPTC:ObjectName", "IFD0:XPTitle", "IPTC:Headline",
+                        "XMP-photoshop:Headline"]),
+    ("temat", "tekst", ["PDF:Subject", "XMP-dc:Description", "IFD0:ImageDescription", "IPTC:Caption-Abstract",
+                        "IFD0:XPSubject"]),
+    ("slowa_kluczowe", "tekst", ["PDF:Keywords", "XML:Keywords", "XMP-pdf:Keywords", "XMP-dc:Subject",
+                                 "IPTC:Keywords", "IFD0:XPKeywords", "XMP-microsoft:LastKeywordXMP"]),
+    ("komentarz", "tekst", ["File:Comment", "IPTC:SpecialInstructions", "ExifIFD:UserComment", "FlashPix:Comments"]),
+    ("linki", "tekst", ["XML:HLinks", "FlashPix:Hyperlinks"]),
+    ("jezyk", "tekst", ["PDF:Language", "XMP-dc:Language", "XML:Language", "FlashPix:LanguageCode",
+                        "FlashPix:LocaleIndicator"]),
     # pochodzenie, historia, cechy pliku
     ("format", "tekst", ["File:FileType"]),
     ("id_dokumentu", "tekst", ["XMP-xmpMM:DocumentID"]),
     ("id_oryginalu", "tekst", ["XMP-xmpMM:OriginalDocumentID"]),
-    ("id_poprzednika", "tekst", ["XMP-xmpMM:DerivedFromDocumentID"]),
+    ("id_poprzednika", "tekst", ["XMP-xmpMM:DerivedFromDocumentID", "XMP-photoshop:DocumentAncestors"]),
     ("historia_programy", "tekst", ["XMP-xmpMM:HistorySoftwareAgent"]),
     ("historia_akcje", "tekst", ["XMP-xmpMM:HistoryAction"]),
     ("historia_daty", "tekst", ["XMP-xmpMM:HistoryWhen"]),
-    ("historia_konwersje", "tekst", ["XMP-xmpMM:HistoryParameters"]),
+    ("historia_konwersje", "tekst", ["XMP-xmpMM:HistoryParameters", "XMP-xmpMM:HistoryParams"]),
     ("nazwa_pliku_zrodlowego", "tekst", ["XMP-xmpMM:PreservedFileName", "XMP-crs:RawFileName"]),
     ("pdfa_czesc", "tekst", ["XMP-pdfaid:Part"]),
     ("pdfa_zgodnosc", "tekst", ["XMP-pdfaid:Conformance"]),
@@ -100,6 +118,25 @@ MAPA = [
     ("gps_szer", "tekst", ["GPS:GPSLatitude", "Composite:GPSLatitude", "XMP-exif:GPSLatitude"]),
     ("gps_dl", "tekst", ["GPS:GPSLongitude", "Composite:GPSLongitude", "XMP-exif:GPSLongitude"]),
     ("gps_data", "tekst", ["Composite:GPSDateTime"]),
+]
+
+# ---------- ZNACZNIKI systemów i usług (mapa 1.3, decyzja 2026-10-27, opcja B) ----------
+# Kolumna „znaczniki” = lista nazw wykrytych po samej OBECNOŚCI tagów; wartości nie trafiają do dokumenty.csv
+# (bywają identyfikujące). Szczegóły zostają w wyniki_long.csv.
+ZNACZNIKI = [
+    # właściwości wpisywane przez system legislacyjny / obiegu dokumentów gmin (typ, organ, status, numer…)
+    ("system_dokumentow", ["PDF:TypDokumentu", "PDF:OrganWydajacy", "PDF:PrzedmiotRegulacji", "PDF:StatusDokumentu",
+                           "PDF:DataDokumentu", "PDF:IdDokumentu", "PDF:NumerDokumentu", "XMP-pdfx:*0020dokumentu",
+                           "XMP-pdfx:Organ0020wydajacy", "XMP-pdfx:Przedmiot0020regulacji"]),
+    # etykiety poufności Microsoft Purview (nazwa, metoda, identyfikator dzierżawy SiteId)
+    ("etykieta_msip", ["*:MSIP_Label*"]),
+    # typ zawartości SharePoint (ContentTypeId „0x0101…”); XML:ContentTypeId był wcześniej ignorowany
+    ("sharepoint", ["PDF:ContentTypeId", "XMP-pdfx:ContentTypeId", "XML:ContentTypeId"]),
+    ("grammarly", ["XML:GrammarlyDocumentId"]),
+    # przestrzeń XMP-Attrib (Ads*): identyfikatory dokumentu i konta usługi zewnętrznej; dostawca nieustalony
+    ("xmp_attrib", ["XMP-Attrib:*"]),
+    ("c2pa", ["XMP-dcterms:Provenance"]),                 # Content Credentials (odwołanie do manifestu C2PA)
+    ("pdfx", ["*:GTS_PDFXVersion"]),                      # standard PDF/X (przygotowanie do druku)
 ]
 
 # Pola osobowe: obok wartości (pseudonimu) zapisywany typ wartości z extract.py (decyzja A7, mapa 1.2).
@@ -144,7 +181,7 @@ IGNOROWANE = [
     "XML:ScaleCrop", "XML:LinksUpToDate", "XML:SharedDoc", "XML:HyperlinksChanged", "XML:Words", "XML:Paragraphs",
     "XML:DocSecurity", "XML:Pages", "XML:Characters", "XML:Lines", "XML:HeadingPairs", "XML:CharactersWithSpaces",
     "XML:TitlesOfParts", "XML:PresentationFormat", "XML:Slides", "XML:Notes", "XML:HiddenSlides", "XML:MMClips",
-    "XML:ContentTypeId", "XML:TemplateVersion", "XML:EurolookVersion", "XML:CreatedUsing", "XML:Formatting",
+    "XML:TemplateVersion", "XML:EurolookVersion", "XML:CreatedUsing", "XML:Formatting",
     "XML:LastEditedUsing", "XML:Type", "XML:EL_Language", "XML:Tag_DocHome",
     "MS-DOC:Words", "MS-DOC:Characters", "MS-DOC:Pages", "MS-DOC:Paragraphs", "MS-DOC:Lines",
     "FlashPix:Identification", "FlashPix:DocFlags", "FlashPix:Word97", "FlashPix:Pages", "FlashPix:Words",
@@ -164,6 +201,29 @@ IGNOROWANE = [
     "IPTC:CodedCharacterSet", "IPTC:ApplicationRecordVersion", "IPTC:EnvelopeRecordVersion",
     "IPTC:DateCreated", "IPTC:TimeCreated", "IPTC:DigitalCreationDate", "IPTC:DigitalCreationTime",
     "PostScript:AI*", "PostScript:BoundingBox",          # 1.2: PostScript:Creator przeniesiony do program_tworzacy
+    # 1.3 (2026-10-27): budowa i kolor obrazu
+    "IFD0:BitsPerSample", "IFD0:PhotometricInterpretation", "IFD0:SamplesPerPixel", "IFD0:Compression",
+    "IFD0:PlanarConfiguration", "IFD0:YCbCr*", "IFD0:WhitePoint", "IFD0:PrimaryChromaticities", "IFD0:Gamma",
+    "IFD0:SensitivityType", "IFD0:SubfileType", "IFD0:Strip*", "IFD0:RowsPerStrip", "IFD0:Predictor",
+    "XMP-photoshop:ColorMode", "XMP-photoshop:ICCProfileName", "PNG:Palette", "PNG:Transparency", "PNG:ProfileName",
+    "XMP-tiff:*", "XMP-exif:ExifImageWidth", "XMP-exif:ExifImageHeight", "XMP-exif:ColorSpace", "XMP-exif:NativeDigest",
+    "ExifIFD:Gamma", "ExifIFD:SubjectArea", "ExifIFD:CompositeImage", "ExifIFD:ImageNumber", "ExifIFD:Interop*",
+    "MPF0:*", "MPImage*:*", "XMP-crd:*", "XMP-aux:*AlreadyApplied",
+    # regiony twarzy bez nazw (RegionName — osobowy — celowo NIE jest ignorowany)
+    "XMP-mwg-rs:RegionType", "XMP-mwg-rs:RegionArea*", "XMP-mwg-rs:RegionExtensions*",
+    "XMP-mwg-rs:RegionAppliedToDimensions*",
+    # profile aparatu (marka/model/obiektyw zmapowane wyżej), autor profilu to nie autor dokumentu
+    "XMP-photoshop:CameraProfiles*",
+    # miniatury, oceny, identyfikatory techniczne
+    "XMP-xmp:PageImage*", "XMP-xmp:Label", "XMP-xmpDM:Pick", "XMP-photoshop:LegacyIPTCDigest",
+    "XMP-xmpNote:HasExtendedXMP", "XMP-idPriv:*", "XMP-xmpMM:Subject", "FlashPix:ThumbnailClip",
+    "PDF:TagD", "PDF:TagS", "XML:Order", "XML:Xd_Signature", "XML:ShareDoc",
+    # statystyki dokumentu
+    "XMP-meta:Document-statistic*", "XMP-meta:TemplateType", "XMP-meta:User-definedName",
+    "FlashPix:Wk_*", "FlashPix:ZNAKI", "FlashPix:TekstJI",
+    # banki zdjęć: numer zdjęcia, kraj zdjęcia; oznaczenie praw (bez treści osobowej)
+    "IPTC:Source", "XMP-photoshop:Source", "IPTC:Country-PrimaryLocationName", "XMP-photoshop:Country",
+    "XMP-xmpRights:Marked", "XMP-xmpRights:UsageTerms",
 ]
 
 # Formaty z listy badania (decyzja 2026-10-18) wg File:FileType; inne (np. XML/XHTML z ZIP-ów sprzed filtra)
@@ -214,7 +274,14 @@ RE_CZAS = re.compile(r"(\d+(?:\.\d+)?)\s*(day|hour|min(?:ute)?|sec(?:ond)?|s)s?\
 JEDN = {"day": 1440, "hour": 60, "min": 1, "minute": 1, "sec": 1 / 60, "second": 1 / 60, "s": 1 / 60}
 
 
+RE_ISO_CZAS = re.compile(r"^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$")
+
+
 def parsuj_minuty(s):
+    m = RE_ISO_CZAS.match(s.strip())              # ISO 8601 (ODF, np. „PT60S”, „PT1H2M”) — od mapy 1.3
+    if m and any(m.groups()):
+        d, h, mi, se = (float(x or 0) for x in m.groups())
+        return round(d * 1440 + h * 60 + mi + se / 60, 2)
     tr = RE_CZAS.findall(s)
     if not tr:
         return None
@@ -311,6 +378,13 @@ def normalizuj_plik(tagi, typy=None):
             wiersz[f"{pole}_typ"] = typy.get(wybor[0], "") if wybor else ""
         if len(zrodla) > 1:
             wiersz[f"{pole}_rozbiezne"] = roz
+    znaczniki = []
+    for nazwa, wzorce in ZNACZNIKI:
+        trafione = [k for k in tagi if pasuje(k, wzorce)]
+        uzyte.update(trafione)
+        if trafione:
+            znaczniki.append(nazwa)
+    wiersz["znaczniki"] = ";".join(znaczniki)
     return wiersz, uzyte
 
 
@@ -357,6 +431,7 @@ def main():
     nieznane = collections.defaultdict(lambda: {"pliki": 0, "instytucje": set(), "przyklad": ""})
     rozb = collections.Counter()
     typy_autora = collections.Counter()
+    licz_znaczniki = collections.Counter()
     for plik, d in pliki.items():
         fmt = d["tagi"].get("File:FileType", "")
         if fmt not in FORMATY:
@@ -371,6 +446,7 @@ def main():
         for k, v in w.items():
             if k.endswith("_rozbiezne") and v:
                 rozb[k[:-len("_rozbiezne")]] += 1
+        licz_znaczniki.update(x for x in w["znaczniki"].split(";") if x)
         typy_autora[w.get("autor_typ") or ("(brak autora)" if not w.get("autor") else "(brak typu)")] += 1
         w["n_pol_kanonicznych"] = sum(1 for pole, rodzaj, _ in MAPA
                                       if pole != "format" and (w.get(pole) not in ("", None) if rodzaj != "data"
@@ -379,7 +455,7 @@ def main():
         wyniki.append({"plik": plik, **d["meta"], **meta_s.get(plik, {}), "wersja_mapy": WERSJA_MAPY, **w})
 
     stale = ["plik", "instytucja", "url", "sha256", "z_archiwum", "data_w_archiwum", "wersja_mapy",
-             "n_pol_kanonicznych", "rozbiezne_pola"]
+             "n_pol_kanonicznych", "rozbiezne_pola", "znaczniki"]
     kol = stale + kolumny_pol()
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     with open(a.out, "w", encoding="utf-8-sig", newline="") as f:
@@ -389,6 +465,8 @@ def main():
     if pominiete:
         print(f"[i] pominięte (format spoza listy): {dict(pominiete)}", file=sys.stderr)
     print("[i] typ autora (dokumenty): " + ", ".join(f"{k}={v}" for k, v in typy_autora.most_common()),
+          file=sys.stderr)
+    print("[i] znaczniki (dokumenty): " + (", ".join(f"{k}={v}" for k, v in licz_znaczniki.most_common()) or "brak"),
           file=sys.stderr)
     print("[i] rozbieżności między źródłami (pole: dokumenty): " +
           (", ".join(f"{k}={v}" for k, v in rozb.most_common()) or "brak"), file=sys.stderr)
@@ -403,7 +481,7 @@ def main():
     if a.raport:
         Path(a.raport).write_text(json.dumps({
             "wersja_mapy": WERSJA_MAPY, "dokumentow": len(wyniki), "pominiete_formaty": dict(pominiete),
-            "typy_autora": dict(typy_autora), "rozbieznosci": dict(rozb),
+            "typy_autora": dict(typy_autora), "znaczniki": dict(licz_znaczniki), "rozbieznosci": dict(rozb),
             "nieznane": {k: {"pliki": n["pliki"], "instytucje": sorted(n["instytucje"]), "przyklad": n["przyklad"]}
                          for k, n in nieznane.items()},
         }, ensure_ascii=False, indent=2), encoding="utf-8")
