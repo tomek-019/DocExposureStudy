@@ -2,7 +2,7 @@
 """
 extract.py — etap EKSTRAKCJI: exiftool -> CSV (szeroki i opcjonalnie długi) z pseudonimizacją,
 potem usunięcie surowych plików (zasada 2). Logika bez zmian względem `meta2csv.py extract` (v5), z dodatkiem:
-typ wartości pól osobowych (osoba/organizacja/zaslepka/nieustalone) liczony przed pseudonimizacją
+typ wartości pól osobowych (osoba/login/organizacja/zaslepka/nieustalone) liczony przed pseudonimizacją
 (kolumny typ_wartosci / typy_wartosci), tryb --podglad do strojenia reguły (JAWNE wartości, tylko terminal)
 oraz tryb --ksztalty (zamaskowane kształty wartości, bezpieczne do przekazania dalej).
 
@@ -49,8 +49,9 @@ def czy_osobowy(klucz: str) -> bool:
 
 # ---------- typ wartości pól osobowych (decyzja A7, 2026-10-26) ----------
 # Liczony na PRAWDZIWEJ wartości przed pseudonimizacją; do CSV trafia tylko typ, nigdy wartość.
-# Kolejność: zaślepka -> organizacja -> osoba -> nieustalone (wygrywa pierwsze dopasowanie).
-TYPY_RANGA = {"osoba": 3, "nieustalone": 2, "organizacja": 1, "zaslepka": 0}   # przy kilku częściach: najwyższa
+# Kolejność: zaślepka -> organizacja -> login -> osoba -> nieustalone (wygrywa pierwsze dopasowanie).
+# 2026-10-27: typ „login” (nazwa konta: jeden ciąg bez spacji, np. jkowalski, jan.kowalski, jk12).
+TYPY_RANGA = {"osoba": 4, "login": 3, "nieustalone": 2, "organizacja": 1, "zaslepka": 0}   # kilka części: najwyższa
 
 ZASLEPKI = {
     "admin", "administrator", "user", "użytkownik", "uzytkownik", "owner", "właściciel", "wlasciciel",
@@ -73,6 +74,7 @@ OCZYSC_RE = re.compile(
 )
 WYRAZ_RE = re.compile(r"^[^\W\d_]+(?:-[^\W\d_]+)*$")        # same litery, opcjonalnie z łącznikiem
 INICJAL_RE = re.compile(r"^[^\W\d_]\.$")                     # „J.”
+LOGIN_RE = re.compile(r"^(?=.*[^\W\d_])[\w.\-]+$")          # jeden ciąg: litery (+ cyfry, . _ -), min. 1 litera
 
 
 def typ_czesci(v: str) -> str:
@@ -81,8 +83,14 @@ def typ_czesci(v: str) -> str:
         return "zaslepka"
     if ORG_RE.search(v) or ORG_SKROTY_RE.search(v):
         return "organizacja"
+    if " " not in v and LOGIN_RE.match(v):
+        # same litery (z łącznikiem): login tylko pisany małymi (jkowalski); „Kowalski”, „ANNA”, „Kowalska-Nowak”
+        # mogą być samym imieniem/nazwiskiem -> nieustalone. Cyfry lub . _ (jk12, jan.kowalski, JK_Kowalski) -> login.
+        if WYRAZ_RE.match(v):
+            return "login" if v.islower() else "nieustalone"
+        return "login"
     t = v.split()
-    pelne = [x for x in t if WYRAZ_RE.match(x) and len(x) >= 2]
+    pelne =[x for x in t if WYRAZ_RE.match(x) and len(x) >= 2]
     # nieznany skrót obok zwykłych wyrazów (np. „ABC Kowalski”) -> nie osoba; całość wielkimi literami jest OK
     skrot = not v.isupper() and any(x.isalpha() and x.isupper() and 2 <= len(x) <= 4 for x in t)
     if 2 <= len(t) <= 4 and pelne and not skrot and all(WYRAZ_RE.match(x) or INICJAL_RE.match(x) for x in t):
