@@ -108,8 +108,25 @@ URL_RE = re.compile(
 SEPARATORY = " \t-–—/|:,;"
 
 
+NAWIAS_RE = re.compile(r"\s[(\[]([^()\[\]]*)[)\]]")      # „Jan Kowalski (jkowal)” — dopisek w nawiasie po spacji
+
+
+def bez_niedomknietych(v: str) -> str:
+    """Usuwa nawiasy bez pary (np. „Jan Kowalski[”); sparowane zostają („Writer(R) 2.0”)."""
+    for o, z in ("()", "[]"):
+        if v.count(o) != v.count(z):
+            v = v.replace(o, " ").replace(z, " ")
+    return v
+
+
 def typy_czesci(czesc: str) -> list:
-    """Typy jednej części: e-mail w całości; inaczej adresy stron -> organizacja, reszta -> typ_czesci()."""
+    """Typy jednej części: e-mail w całości; dopiski w nawiasach (po spacji) jako osobne części;
+    adresy stron -> organizacja; reszta -> typ_czesci()."""
+    czesc = bez_niedomknietych(czesc)
+    dopiski = NAWIAS_RE.findall(czesc)
+    if dopiski and not EMAIL_RE.search(czesc):
+        reszta = NAWIAS_RE.sub(" ", czesc)
+        return [t for c in [reszta, *dopiski] if c.strip(SEPARATORY) for t in typy_czesci(c)]
     if EMAIL_RE.search(czesc):
         return [typ_czesci(czesc)]
     adresy = URL_RE.findall(czesc)
@@ -121,7 +138,8 @@ def typy_czesci(czesc: str) -> list:
 
 def typ_wartosci(value: str) -> str:
     """osoba / login / email / organizacja / zaslepka / nieustalone dla prawdziwej wartości pola osobowego."""
-    czesci = [c for c in re.split(r"\s+\|\s+|;", value) if c.strip()] or [value]
+    # części: „A | B”, „A; B”, „A - B” (myślnik ze spacjami, np. „Kowalska - Nowak”, „Jan Kowalski - stock.adobe.com”)
+    czesci = [c for c in re.split(r"\s+\|\s+|;|\s+[-–—]\s+", value) if c.strip(SEPARATORY)] or [value]
     return max((t for c in czesci for t in typy_czesci(c)), key=TYPY_RANGA.get)
 
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
