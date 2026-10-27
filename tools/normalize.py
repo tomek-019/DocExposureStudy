@@ -393,9 +393,11 @@ def main():
     print("[i] rozbieżności między źródłami (pole: dokumenty): " +
           (", ".join(f"{k}={v}" for k, v in rozb.most_common()) or "brak"), file=sys.stderr)
     if nieznane:
-        print(f"[!] NIEZNANE tagi ({len(nieznane)}) — dopisz do MAPA albo IGNOROWANE:", file=sys.stderr)
+        print(f"[!] NIEZNANE tagi ({len(nieznane)}) — dopisz do MAPA albo IGNOROWANE "
+              f"(przykłady wartości tylko w --raport):", file=sys.stderr)
         for k, n in sorted(nieznane.items(), key=lambda x: -x[1]["pliki"]):
-            print(f"    {k}: {n['pliki']} plików {sorted(n['instytucje'])} | np. {n['przyklad']!r}", file=sys.stderr)
+            # bez przykładowej wartości (2026-10-27): mogła identyfikować instytucję; przykład tylko w raporcie JSON
+            print(f"    {k}: {n['pliki']} plików {sorted(n['instytucje'])}", file=sys.stderr)
     else:
         print("[+] nieznane tagi: 0", file=sys.stderr)
     if a.raport:

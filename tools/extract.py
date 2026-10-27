@@ -29,7 +29,10 @@ DOMYSLNY_KLUCZ = "~/.config/meta2csv/key.hex"
 PERSON_TAGS = re.compile(
     r"^(Author|Authors|Creator|LastModifiedBy|LastSavedBy|Manager|Contributor|Artist|"
     r"OwnerName|Owner|By-line|Writer|Copyright|Rights|Editor|Operator|Company-?User|"
-    r"CopyrightNotice|Credit|Photographer|For)$",
+    r"CopyrightNotice|Credit|Photographer|For|"
+    # 2026-10-27: Initial-creator (ODF: pierwotny autor), CreditLine (podpis zdjęcia), WebStatement (adres strony,
+    # bywa z nazwiskiem), RegionName (osoba przypisana do twarzy), PersonInImage (IPTC: osoby na zdjęciu)
+    r"Initial-creator|CreditLine|WebStatement|RegionName|PersonInImage)$",
     re.I,
 )
 # Wyjątki: pola o tej nazwie, które w danej grupie zawierają nazwę aplikacji, nie osobę.
