@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
 extract.py — etap EKSTRAKCJI: exiftool -> CSV (szeroki i opcjonalnie długi) z pseudonimizacją,
-potem usunięcie surowych plików (zasada 2). Logika bez zmian względem `meta2csv.py extract` (v5).
+potem usunięcie surowych plików (zasada 2). Logika bez zmian względem `meta2csv.py extract` (v5), z dodatkiem:
+typ wartości pól osobowych (osoba/organizacja/zaslepka/nieustalone) liczony przed pseudonimizacją
+(kolumny typ_wartosci / typy_wartosci) i tryb --podglad do strojenia reguły.
 
 Przykład:
   python3 extract.py --in dane/inst01/pliki --manifest dane/inst01/pliki/manifest.csv \
                      --out dane/wyniki.csv --long dane/wyniki_long.csv
+  python3 extract.py --in dane/inst01/pliki --podglad | less   # strojenie typów
 """
 import argparse, csv, hashlib, hmac, json, os, re, secrets, shutil, subprocess, sys
 from pathlib import Path
@@ -37,6 +40,54 @@ def czy_osobowy(klucz: str) -> bool:
         return False
     tag = klucz.split(":", 1)[-1]
     return bool(PERSON_TAGS.match(tag)) or "author" in tag.lower()
+
+# ---------- typ wartości pól osobowych (decyzja A7, 2026-10-26) ----------
+# Liczony na PRAWDZIWEJ wartości przed pseudonimizacją; do CSV trafia tylko typ, nigdy wartość.
+# Kolejność: zaślepka -> organizacja -> osoba -> nieustalone (wygrywa pierwsze dopasowanie).
+TYPY_RANGA = {"osoba": 3, "nieustalone": 2, "organizacja": 1, "zaslepka": 0}   # przy kilku częściach: najwyższa
+
+ZASLEPKI = {
+    "admin", "administrator", "user", "użytkownik", "uzytkownik", "owner", "właściciel", "wlasciciel",
+    "autor", "author", "imię i nazwisko", "imie i nazwisko", "name", "unknown", "nieznany", "default",
+    "guest", "gość", "gosc", "test", "windows user", "microsoft office user", "użytkownik systemu windows",
+}
+# Rdzenie słów wskazujących organizację (dopasowanie od początku wyrazu, bez rozróżniania wielkości liter).
+ORG_RE = re.compile(
+    r"(?i)\b(urz[aą]d|gmin|starostw|powiat|uniwersyte|politechnik|akademi|uczelni|szko[lł]|wydzia[lł]|"
+    r"instytut|katedr|biur[oaz]|dzia[lł]\b|dzia[lł]u|referat|sekretariat|kancelari|zesp[oó][lł]|"
+    r"rad(a|y|zie|ę)\b|fundacj|stowarzysz|sp[oó][lł]k|sp[oó][lł]dziel|university|office\b|department)"
+    r"|\bsp\.?\s*z\s*o\.?\s*o\b|\bs\.\s?a\.?(\s|$)|\b(ltd|inc|gmbh|llc|corp)\b\.?"
+    r"|www\.|\.(pl|com|eu|org|net|edu)\b"
+)
+# Typowe skróty nazw jednostek (z rozróżnieniem wielkości liter, np. „UG Xyz”, „ZS nr 1”).
+ORG_SKROTY_RE = re.compile(r"\b(UG|UM|UMiG|UMIG|SP|ZS|ZSP|ZSZ|MOPS|GOPS|MGOPS|GOK|MOK|OSP|BIP|PUP|ZUS|ZGK|ZDP|PSP)\b")
+# Elementy wycinane przed klasyfikacją (np. „© 2021 Jan Kowalski” -> „Jan Kowalski”).
+OCZYSC_RE = re.compile(
+    r"(?i)©|\(c\)|\bcopyright\b|\ball rights reserved\b|\bwszelkie prawa zastrzeżone\b|\b(19|20)\d\d\b"
+)
+WYRAZ_RE = re.compile(r"^[^\W\d_]+(?:-[^\W\d_]+)*$")        # same litery, opcjonalnie z łącznikiem
+INICJAL_RE = re.compile(r"^[^\W\d_]\.$")                     # „J.”
+
+
+def typ_czesci(v: str) -> str:
+    v = " ".join(OCZYSC_RE.sub(" ", v).replace(",", " ").split()).strip(" .;:-_/")
+    if not any(c.isalpha() for c in v) or len(v) < 3 or v.casefold() in ZASLEPKI:
+        return "zaslepka"
+    if ORG_RE.search(v) or ORG_SKROTY_RE.search(v):
+        return "organizacja"
+    t = v.split()
+    pelne = [x for x in t if WYRAZ_RE.match(x) and len(x) >= 2]
+    # nieznany skrót obok zwykłych wyrazów (np. „ABC Kowalski”) -> nie osoba; całość wielkimi literami jest OK
+    skrot = not v.isupper() and any(x.isalpha() and x.isupper() and 2 <= len(x) <= 4 for x in t)
+    if 2 <= len(t) <= 4 and pelne and not skrot and all(WYRAZ_RE.match(x) or INICJAL_RE.match(x) for x in t):
+        return "osoba"
+    return "nieustalone"
+
+
+def typ_wartosci(value: str) -> str:
+    """osoba / organizacja / zaslepka / nieustalone dla prawdziwej wartości pola osobowego."""
+    czesci = [c for c in re.split(r"\s+\|\s+|;", value) if c.strip()] or [value]
+    return max((typ_czesci(c) for c in czesci), key=TYPY_RANGA.get)
 
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 # Ścieżki z nazwą użytkownika: C:\Users\jkowalski\..., C:\Documents and Settings\x\..., /home/x/, /Users/x/
@@ -155,6 +206,42 @@ def expand_zips(indir: Path) -> dict:
               + (f" (pominięto {pominiete} spoza listy formatów)" if pominiete else ""), file=sys.stderr)
     return out
 
+def uruchom_exiftool(exe, files):
+    res = subprocess.run([exe, "-j", "-G1", "-a", "-s", "-charset", "filename=utf8", *map(str, files)],
+                         capture_output=True, text=True)
+    try:
+        return json.loads(res.stdout or "[]")
+    except json.JSONDecodeError:
+        sys.exit("[x] Nie udało się sparsować wyjścia exiftool:\n" + res.stderr)
+
+
+def podglad(data):
+    """Tryb --podglad: typy wartości pól osobowych na terminal. Nic nie zapisuje i nic nie usuwa.
+    UWAGA: wypisuje JAWNE wartości — tylko do przejrzenia lokalnie (| less), nie zapisywać, nie wysyłać."""
+    import collections
+    licz = collections.Counter()                      # typ -> liczba wystąpień
+    wart = collections.defaultdict(lambda: [0, set(), ""])   # wartość -> [liczba, tagi, typ]
+    for d in data:
+        for k, v in d.items():
+            if k.startswith(DROP_PREFIXES) or not czy_osobowy(k):
+                continue
+            s = to_str(v)
+            if not s:
+                continue
+            t = typ_wartosci(s)
+            licz[t] += 1
+            w = wart[s]; w[0] += 1; w[1].add(k); w[2] = t
+    print(f"### PODGLĄD (nic nie zapisano): {len(data)} plików, {sum(licz.values())} wartości w polach osobowych")
+    for t in sorted(TYPY_RANGA, key=TYPY_RANGA.get, reverse=True):
+        print(f"   {t:12s} {licz[t]:6d} wystąpień, {sum(1 for w in wart.values() if w[2] == t):5d} unikalnych")
+    print("### ^ te liczby możesz przekazać dalej; PONIŻEJ JAWNE WARTOŚCI — nie zapisuj i nie wysyłaj")
+    for t in sorted(TYPY_RANGA, key=TYPY_RANGA.get, reverse=True):
+        print(f"\n== {t}")
+        for s, (n, tagi, tt) in sorted(wart.items(), key=lambda x: (-x[1][0], x[0])):
+            if tt == t:
+                print(f"{n:5d}  {s[:80]:80s}  {','.join(sorted(tagi))[:60]}")
+
+
 def cmd_extract(a):
     exe, ver = check_exiftool()
     key = load_key(Path(a.key_file).expanduser())
@@ -172,12 +259,9 @@ def cmd_extract(a):
                 if row.get("plik"):
                     manifest[row["plik"]] = row
 
-    res = subprocess.run([exe, "-j", "-G1", "-a", "-s", "-charset", "filename=utf8", *map(str, files)],
-                         capture_output=True, text=True)
-    try:
-        data = json.loads(res.stdout or "[]")
-    except json.JSONDecodeError:
-        sys.exit("[x] Nie udało się sparsować wyjścia exiftool:\n" + res.stderr)
+    data = uruchom_exiftool(exe, files)
+    if a.podglad:
+        return podglad(data)
 
     rows, long_rows, all_cols = [], [], set()
     zip_warn = False
@@ -204,12 +288,14 @@ def cmd_extract(a):
             "data_w_archiwum": zm[2] if zm else "",
         }
         pseud_fields = []
+        typy = {}
         tags = {}
         for k, v in d.items():
             if k.startswith(DROP_PREFIXES):
                 continue
             s = to_str(v)
             if s and czy_osobowy(k):
+                typy[k] = typ_wartosci(s)               # przed pseudonimizacją, potem wartość znika
                 s = pseud(key, s, "P"); pseud_fields.append(k)
             else:
                 s, ch = scrub_text(key, s)
@@ -218,13 +304,14 @@ def cmd_extract(a):
         row["n_tagow"] = len(tags)
         row["n_niepustych"] = sum(1 for v in tags.values() if v != "")
         row["pola_pseudonimizowane"] = ";".join(pseud_fields)
+        row["typy_wartosci"] = ";".join(f"{k}={t}" for k, t in typy.items())
         row.update(tags)
         all_cols.update(tags)
         rows.append(row)
         for k, v in tags.items():
             long_rows.append({"plik": rel, "url": row["url"], "instytucja": row["instytucja"],
                               "grupa": k.split(":", 1)[0], "tag": k.split(":", 1)[-1], "wartosc": v,
-                              "pseudonimizowane": int(k in pseud_fields)})
+                              "pseudonimizowane": int(k in pseud_fields), "typ_wartosci": typy.get(k, "")})
 
     if zip_warn:
         print("[!] UWAGA: exiftool nie ma Archive::Zip — metadane DOCX/XLSX/PPTX NIE zostały odczytane.\n"
@@ -237,7 +324,7 @@ def cmd_extract(a):
         print(f"[!] {len(missing_url)} plików bez URL w manifeście: {', '.join(missing_url[:5])}...", file=sys.stderr)
 
     fixed = ["plik", "sha256", "url", "instytucja", "exiftool_ver", "z_archiwum", "data_w_archiwum", "n_tagow",
-             "n_niepustych", "pola_pseudonimizowane"]
+             "n_niepustych", "pola_pseudonimizowane", "typy_wartosci"]
     # Dopisywanie do istniejących wyników (pliki są usuwane po ekstrakcji, więc kolejne partie trzeba łączyć)
     out_p = Path(a.out)
     new_names = {r["plik"] for r in rows}
@@ -256,12 +343,12 @@ def cmd_extract(a):
     print(f"[+] {len(rows)} plików łącznie -> {out_p} ({len(cols)} kolumn)", file=sys.stderr)
     if a.long:
         lp = Path(a.long)
-        lf = ["plik", "url", "instytucja", "grupa", "tag", "wartosc", "pseudonimizowane"]
+        lf = ["plik", "url", "instytucja", "grupa", "tag", "wartosc", "pseudonimizowane", "typ_wartosci"]
         if lp.exists():
             with open(lp, encoding="utf-8-sig") as f:
                 long_rows = [r for r in csv.DictReader(f) if r["plik"] not in new_names] + long_rows
         with open(lp, "w", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=lf); w.writeheader(); w.writerows(long_rows)
+            w = csv.DictWriter(f, fieldnames=lf, restval=""); w.writeheader(); w.writerows(long_rows)
         print(f"[+] format długi -> {lp} ({len(long_rows)} wierszy)", file=sys.stderr)
 
     # Minimalizacja: surowe pliki usuwane po zapisaniu wyników (zostaje manifest.csv i sha256 w CSV)
@@ -279,13 +366,21 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--in", dest="inp", required=True)
     p.add_argument("--manifest", help="CSV z kolumnami plik,url[,instytucja]")
-    p.add_argument("--out", required=True)
+    p.add_argument("--out", help="CSV wynikowy (wymagany, chyba że --podglad)")
     p.add_argument("--long", help="opcjonalny CSV w formacie długim (plik, tag, wartość)")
     p.add_argument("--key-file", default=DOMYSLNY_KLUCZ, help="klucz HMAC (poza katalogiem danych)")
     p.add_argument("--keep-files", action="store_true", help="NIE usuwaj surowych plików po ekstrakcji (tylko do debugowania)")
+    p.add_argument("--podglad", action="store_true",
+                   help="tylko podgląd typów wartości pól osobowych na terminal (JAWNE wartości; nic nie zapisuje ani nie usuwa)")
     p.add_argument("--allow-missing-zip", action="store_true", help="nie przerywaj, gdy brak Archive::Zip")
     a = p.parse_args()
-    cmd_extract(a)
+    if not a.out and not a.podglad:
+        p.error("--out jest wymagany (poza trybem --podglad)")
+    try:
+        cmd_extract(a)
+    except BrokenPipeError:                       # np. wyjście z `less` przed końcem podglądu
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(0)
 
 
 if __name__ == "__main__":
