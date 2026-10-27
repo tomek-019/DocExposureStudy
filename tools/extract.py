@@ -59,16 +59,19 @@ ZASLEPKI = {
     "autor", "author", "imię i nazwisko", "imie i nazwisko", "name", "unknown", "nieznany", "default",
     "guest", "gość", "gosc", "test", "windows user", "microsoft office user", "użytkownik systemu windows",
 }
+# Słowa, których obecność w części oznacza zaślepkę (2026-10-27: „Unknown Creator”, „your user name”, „Dell User”).
+ZASLEPKI_SLOWA = {"unknown", "user", "username", "name", "użytkownik", "uzytkownik", "nieznany", "nieznana"}
 # Rdzenie słów wskazujących organizację (dopasowanie od początku wyrazu, bez rozróżniania wielkości liter).
 ORG_RE = re.compile(
     r"(?i)\b(urz[aą]d|gmin|starostw|powiat|uniwersyte|politechnik|akademi|uczelni|szko[lł]|wydzia[lł]|"
     r"instytut|katedr|biur[oaz]|dzia[lł]\b|dzia[lł]u|referat|sekretariat|kancelari|zesp[oó][lł]|"
-    r"rad(a|y|zie|ę)\b|fundacj|stowarzysz|sp[oó][lł]k|sp[oó][lł]dziel|university|office\b|department)"
+    r"rad(a|y|zie|ę)\b|fundacj|stowarzysz|sp[oó][lł]k|sp[oó][lł]dziel|university|office\b|department|"
+    r"ochron[aay]\s+[śs]rodowisk|kadr[ya]?\b|ksi[eę]gowo[śs]|promocj|sekcj|zarz[aą]d\b|redakcj)"
     r"|\bsp\.?\s*z\s*o\.?\s*o\b|\bs\.\s?a\.?(\s|$)|\b(ltd|inc|gmbh|llc|corp)\b\.?"
     r"|www\.|\.(pl|com|eu|org|net|edu)\b"
 )
 # Typowe skróty nazw jednostek (z rozróżnieniem wielkości liter, np. „UG Xyz”, „ZS nr 1”).
-ORG_SKROTY_RE = re.compile(r"\b(UG|UM|UMiG|UMIG|SP|ZS|ZSP|ZSZ|MOPS|GOPS|MGOPS|GOK|MOK|OSP|BIP|PUP|ZUS|ZGK|ZDP|PSP)\b")
+ORG_SKROTY_RE = re.compile(r"\b(UG|UM|UMiG|UMIG|US|SP|ZS|ZSP|ZSZ|MOPS|GOPS|MGOPS|GOK|MOK|OSP|BIP|PUP|ZUS|ZGK|ZDP|PSP)\b")
 # Elementy wycinane przed klasyfikacją (np. „© 2021 Jan Kowalski” -> „Jan Kowalski”).
 OCZYSC_RE = re.compile(
     r"(?i)©|\(c\)|\bcopyright\b|\ball rights reserved\b|\bwszelkie prawa zastrzeżone\b|\b(19|20)\d\d\b"
@@ -84,6 +87,8 @@ def typ_czesci(v: str) -> str:
     v = " ".join(OCZYSC_RE.sub(" ", v).replace(",", " ").split()).strip(" .;:-_/")
     if not any(c.isalpha() for c in v) or len(v) < 3 or v.casefold() in ZASLEPKI:
         return "zaslepka"
+    if any(w in ZASLEPKI_SLOWA for w in re.findall(r"[^\W\d_]+", v.casefold())):
+        return "zaslepka"
     if ORG_RE.search(v) or ORG_SKROTY_RE.search(v):
         return "organizacja"
     if " " not in v and LOGIN_RE.match(v):
@@ -96,6 +101,9 @@ def typ_czesci(v: str) -> str:
     pelne =[x for x in t if WYRAZ_RE.match(x) and len(x) >= 2]
     # nieznany skrót obok zwykłych wyrazów (np. „ABC Kowalski”) -> nie osoba; całość wielkimi literami jest OK
     skrot = not v.isupper() and any(x.isalpha() and x.isupper() and 2 <= len(x) <= 4 for x in t)
+    # całość wielkimi i każdy wyraz ≤3 litery (np. kod jednostki „AB CDE”) -> nie osoba; „JAN KOWALSKI” nadal osoba
+    if v.isupper() and all(len(x) <= 3 for x in t):
+        return "nieustalone"
     if 2 <= len(t) <= 4 and pelne and not skrot and all(WYRAZ_RE.match(x) or INICJAL_RE.match(x) for x in t):
         return "osoba"
     return "nieustalone"
