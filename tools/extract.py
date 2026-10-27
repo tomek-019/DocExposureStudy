@@ -101,10 +101,28 @@ def typ_czesci(v: str) -> str:
     return "nieustalone"
 
 
+# Adres strony jako osobna część wartości (decyzja 2026-10-27): „Jan Kowalski www.jkfoto.pl” = osoba + organizacja.
+URL_RE = re.compile(
+    r"(?i)https?://\S+|\bwww\.[\w.-]+(?:/\S*)?|\b(?:[\w-]+\.)+(?:pl|com|eu|org|net|edu|info|io|de|uk)\b(?:/\S*)?"
+)
+SEPARATORY = " \t-–—/|:,;"
+
+
+def typy_czesci(czesc: str) -> list:
+    """Typy jednej części: e-mail w całości; inaczej adresy stron -> organizacja, reszta -> typ_czesci()."""
+    if EMAIL_RE.search(czesc):
+        return [typ_czesci(czesc)]
+    adresy = URL_RE.findall(czesc)
+    if not adresy:
+        return [typ_czesci(czesc)]
+    reszta = URL_RE.sub(" ", czesc).strip(SEPARATORY)
+    return ["organizacja"] + ([typ_czesci(reszta)] if reszta else [])
+
+
 def typ_wartosci(value: str) -> str:
-    """osoba / organizacja / zaslepka / nieustalone dla prawdziwej wartości pola osobowego."""
+    """osoba / login / email / organizacja / zaslepka / nieustalone dla prawdziwej wartości pola osobowego."""
     czesci = [c for c in re.split(r"\s+\|\s+|;", value) if c.strip()] or [value]
-    return max((typ_czesci(c) for c in czesci), key=TYPY_RANGA.get)
+    return max((t for c in czesci for t in typy_czesci(c)), key=TYPY_RANGA.get)
 
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 # Ścieżki z nazwą użytkownika: C:\Users\jkowalski\..., C:\Documents and Settings\x\..., /home/x/, /Users/x/
