@@ -66,7 +66,9 @@ ORG_RE = re.compile(
     r"(?i)\b(urz[aą]d|gmin|starostw|powiat|uniwersyte|politechnik|akademi|uczelni|szko[lł]|wydzia[lł]|"
     r"instytut|katedr|biur[oaz]|dzia[lł]\b|dzia[lł]u|referat|sekretariat|kancelari|zesp[oó][lł]|"
     r"rad(a|y|zie|ę)\b|fundacj|stowarzysz|sp[oó][lł]k|sp[oó][lł]dziel|university|office\b|department|"
-    r"ochron[aay]\s+[śs]rodowisk|kadr[ya]?\b|ksi[eę]gowo[śs]|promocj|sekcj|zarz[aą]d\b|redakcj)"
+    r"ochron[aay]\s+[śs]rodowisk|kadr[ya]?\b|ksi[eę]gowo[śs]|promocj|sekcj|zarz[aą]d\b|redakcj|"
+    # stanowiska (decyzja 2026-10-27, opcja A): wartość opisuje urząd, nie osobę — typ „organizacja”
+    r"burmistrz|w[oó]jt|starost|prezydent|dyrektor|kierownik|so[lł]tys|prezes|sekretarz|skarbnik)"
     r"|\bsp\.?\s*z\s*o\.?\s*o\b|\bs\.\s?a\.?(\s|$)|\b(ltd|inc|gmbh|llc|corp)\b\.?"
     r"|www\.|\.(pl|com|eu|org|net|edu)\b"
 )
