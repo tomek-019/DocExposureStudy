@@ -136,7 +136,34 @@ def to_str(v) -> str:
         return " | ".join(to_str(x) for x in v)
     if isinstance(v, dict):
         return json.dumps(v, ensure_ascii=False)
-    return "" if v is None else str(v)
+    return "" if v is None else dekoduj_napis_pdf(str(v))
+
+
+# ---------- napisy PDF zapisane dosłownie (problem wykryty 2026-10-27 trybem --ksztalty) ----------
+# Część generatorów wpisuje do XMP (np. XMP-dc:Creator) napis w składni PDF zamiast tekstu:
+# BOM UTF-16 i znaki jako sekwencje ósemkowe, np. "\376\377\000J\000a\000n" = "Jan".
+# Bez dekodowania ta sama osoba dostaje inny pseudonim niż w PDF:Author, a typ wartości wychodzi „nieustalone”.
+NAPIS_PDF_RE = re.compile(r"^\\(376\\377|377\\376)")
+_ESC_PDF_RE = re.compile(r"\\([0-7]{1,3}|.)", re.S)
+_ESC_PDF = {"n": b"\n", "r": b"\r", "t": b"\t", "b": b"\b", "f": b"\f"}
+licznik_zdekodowanych = 0                        # raportowany na końcu ekstrakcji
+
+
+def dekoduj_napis_pdf(s: str) -> str:
+    """Napis w składni PDF z BOM UTF-16 (\\376\\377 = BE, \\377\\376 = LE) -> zwykły tekst. Inne wartości bez zmian."""
+    global licznik_zdekodowanych
+    if not NAPIS_PDF_RE.match(s):
+        return s
+    def bajty(m):
+        e = m.group(1)
+        if e[0] in "01234567":
+            return chr(int(e, 8) & 0xFF)
+        return _ESC_PDF.get(e, e.encode("latin-1", "replace")).decode("latin-1")   # \\ \( \) -> znak
+    surowe = _ESC_PDF_RE.sub(bajty, s).encode("latin-1", "replace")
+    kodowanie = "utf-16-be" if surowe.startswith(b"\xfe\xff") else "utf-16-le"
+    tekst = surowe[2:].decode(kodowanie, "replace").strip("\x00")
+    licznik_zdekodowanych += 1
+    return tekst
 
 
 # ---------- tryb --ksztalty (decyzja 2026-10-27, wariant B) ----------
@@ -439,6 +466,10 @@ def cmd_extract(a):
               "    Zainstaluj: sudo apt install libarchive-zip-perl i uruchom ponownie.", file=sys.stderr)
         if not a.allow_missing_zip:
             sys.exit(2)
+
+    if licznik_zdekodowanych:
+        print(f"[i] zdekodowano {licznik_zdekodowanych} wartości zapisanych jako napis PDF (UTF-16 ósemkowo)",
+              file=sys.stderr)
 
     missing_url = [r["plik"] for r in rows if not r["url"]]
     if missing_url:
