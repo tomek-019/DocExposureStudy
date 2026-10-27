@@ -2,7 +2,7 @@
 """
 extract.py — etap EKSTRAKCJI: exiftool -> CSV (szeroki i opcjonalnie długi) z pseudonimizacją,
 potem usunięcie surowych plików (zasada 2). Logika bez zmian względem `meta2csv.py extract` (v5), z dodatkiem:
-typ wartości pól osobowych (osoba/login/organizacja/zaslepka/nieustalone) liczony przed pseudonimizacją
+typ wartości pól osobowych (osoba/login/email/organizacja/zaslepka/nieustalone) liczony przed pseudonimizacją
 (kolumny typ_wartosci / typy_wartosci), tryb --podglad do strojenia reguły (JAWNE wartości, tylko terminal)
 oraz tryb --ksztalty (zamaskowane kształty wartości, bezpieczne do przekazania dalej).
 
@@ -49,9 +49,10 @@ def czy_osobowy(klucz: str) -> bool:
 
 # ---------- typ wartości pól osobowych (decyzja A7, 2026-10-26) ----------
 # Liczony na PRAWDZIWEJ wartości przed pseudonimizacją; do CSV trafia tylko typ, nigdy wartość.
-# Kolejność: zaślepka -> organizacja -> login -> osoba -> nieustalone (wygrywa pierwsze dopasowanie).
-# 2026-10-27: typ „login” (nazwa konta: jeden ciąg bez spacji, np. jkowalski, jan.kowalski, jk12).
-TYPY_RANGA = {"osoba": 4, "login": 3, "nieustalone": 2, "organizacja": 1, "zaslepka": 0}   # kilka części: najwyższa
+# Kolejność: email -> zaślepka -> organizacja -> login -> osoba -> nieustalone (wygrywa pierwsze dopasowanie).
+# 2026-10-27: typ „login” (nazwa konta: jeden ciąg bez spacji, np. jkowalski, jan.kowalski, jk12);
+# typ „email” (adres e-mail; sprawdzany przed organizacją, bo ORG_RE łapie domeny .pl/.com).
+TYPY_RANGA = {"email": 5, "osoba": 4, "login": 3, "nieustalone": 2, "organizacja": 1, "zaslepka": 0}  # kilka części: najwyższa
 
 ZASLEPKI = {
     "admin", "administrator", "user", "użytkownik", "uzytkownik", "owner", "właściciel", "wlasciciel",
@@ -78,6 +79,8 @@ LOGIN_RE = re.compile(r"^(?=.*[^\W\d_])[\w.\-]+$")          # jeden ciąg: liter
 
 
 def typ_czesci(v: str) -> str:
+    if EMAIL_RE.search(v):                          # przed czyszczeniem: OCZYSC_RE rozcinałby np. jan.1985@...
+        return "email"
     v = " ".join(OCZYSC_RE.sub(" ", v).replace(",", " ").split()).strip(" .;:-_/")
     if not any(c.isalpha() for c in v) or len(v) < 3 or v.casefold() in ZASLEPKI:
         return "zaslepka"
