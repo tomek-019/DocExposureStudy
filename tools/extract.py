@@ -3,12 +3,14 @@
 extract.py — etap EKSTRAKCJI: exiftool -> CSV (szeroki i opcjonalnie długi) z pseudonimizacją,
 potem usunięcie surowych plików (zasada 2). Logika bez zmian względem `meta2csv.py extract` (v5), z dodatkiem:
 typ wartości pól osobowych (osoba/organizacja/zaslepka/nieustalone) liczony przed pseudonimizacją
-(kolumny typ_wartosci / typy_wartosci) i tryb --podglad do strojenia reguły.
+(kolumny typ_wartosci / typy_wartosci), tryb --podglad do strojenia reguły (JAWNE wartości, tylko terminal)
+oraz tryb --ksztalty (zamaskowane kształty wartości, bezpieczne do przekazania dalej).
 
 Przykład:
-  python3 extract.py --in dane/inst01/pliki --manifest dane/inst01/pliki/manifest.csv \
+  python3 extract.py --in dane/inst01/pliki --manifest dane/inst01/pliki/manifest.csv \\
                      --out dane/wyniki.csv --long dane/wyniki_long.csv
-  python3 extract.py --in dane/inst01/pliki --podglad | less   # strojenie typów
+  python3 extract.py --in dane/inst01/pliki --podglad | less    # strojenie typów (jawne wartości!)
+  python3 extract.py --in dane/inst01/pliki --ksztalty          # kształty do przekazania
 """
 import argparse, csv, hashlib, hmac, json, os, re, secrets, shutil, subprocess, sys
 from pathlib import Path
@@ -137,6 +139,92 @@ def to_str(v) -> str:
     return "" if v is None else str(v)
 
 
+# ---------- tryb --ksztalty (decyzja 2026-10-27, wariant B) ----------
+# Kształt wartości = zamaskowana postać, którą można przekazać dalej (do rozmowy z Claude) zamiast jawnej
+# wartości. Litery -> klasy wyrazów, cyfry -> 9, interpunkcja zostaje. Jawnie zostają WYŁĄCZNIE: słowa ogólne
+# z listy SLOWA_OGOLNE, rdzenie organizacji z ORG_RE, skróty jednostek z ORG_SKROTY_RE i końcówki domen z TLD.
+# Imiona, nazwiska, loginy i nazwy własne nie przechodzą (dodatkowo pilnuje tego bezpiecznik w ksztalt()).
+SLOWA_OGOLNE = {w for z in ZASLEPKI for w in z.split()} | {
+    "to", "by", "your", "my", "the", "of", "and", "for", "creator", "unknown", "copyright", "all", "rights",
+    "reserved", "wszelkie", "prawa", "zastrzeżone", "zastrzezone", "nr", "im", "stock", "photo", "foto", "fot",
+    "www", "http", "https",
+    # stanowiska i funkcje (klasa błędów #5 z analizy podglądu 2026-10-27)
+    "burmistrz", "burmistrza", "wójt", "wojt", "wójta", "wojta", "starosta", "prezydent", "dyrektor",
+    "kierownik", "sołtys", "soltys", "sekretarz", "skarbnik", "prezes", "zastępca", "zastepca", "inspektor",
+    "specjalista", "referent", "główny", "glowny", "księgowy", "ksiegowy", "ochrona", "środowiska",
+    "srodowiska", "kadry", "księgowość", "ksiegowosc", "promocja", "redakcja", "zarząd", "zarzad",
+}
+TLD = {"pl", "com", "eu", "org", "net", "edu", "gov", "info", "de", "uk", "io"}
+_TOKEN_RE = re.compile(r"[^\W\d_]+|\d+|\s+|.", re.S)
+
+
+def _klasa_wyrazu(w: str) -> str:
+    """Klasa ciągu liter: A (1 wielka), a (1 mała), AA (2–4 wielkie), AA+ (≥5 wielkich), Aa (Wielka+małe),
+    a (same małe, ≥2 → 'aa'), aA (mieszane, np. UMiG)."""
+    if len(w) == 1:
+        return "A" if w.isupper() else "a"
+    if w.isupper():
+        return "AA" if len(w) <= 4 else "AA+"
+    if w.islower():
+        return "aa"
+    if w[0].isupper() and w[1:].islower():
+        return "Aa"
+    return "aA"
+
+
+def ksztalt(value: str) -> str:
+    """Zamaskowany kształt wartości (bez imion, nazwisk, loginów). Przykłady:
+    'Jan Kowalski' -> 'Aa Aa'; 'jkowalski' -> 'aa'; 'jan.kowalski@uczelnia.edu.pl' -> 'aa.aa@aa.«edu».«pl»';
+    'Urząd Gminy Xyz' -> '«urząd» «gmin…» Aa'; 'J. Kowalska - Nowak' -> 'A. Aa - Aa'."""
+    tokeny = _TOKEN_RE.findall(value)
+    wynik, poprzedni = [], ""
+    for t in tokeny:
+        if t.isspace():
+            wynik.append(" ")
+        elif t.isdigit():
+            wynik.append("9")
+        elif t.isalpha():
+            cf = t.casefold()
+            m = ORG_RE.match(t)
+            if cf in SLOWA_OGOLNE:
+                wynik.append(f"«{cf}»")
+            elif poprzedni == "." and cf in TLD:
+                wynik.append(f"«{cf}»")
+            elif m and m.group(1):
+                wynik.append(f"«{m.group(1).casefold()}{'…' if len(m.group(1)) < len(t) else ''}»")
+            elif ORG_SKROTY_RE.fullmatch(t):
+                wynik.append(f"«{t}»")
+            else:
+                wynik.append(_klasa_wyrazu(t))
+        else:
+            wynik.append(t)                       # interpunkcja i znaki specjalne (©, @, -, _, (, ), |)
+        if not t.isspace():
+            poprzedni = t
+    s = "".join(wynik)
+    # bezpiecznik: żaden niewymieniony z nazwy wyraz oryginału (≥3 litery) nie może pojawić się w kształcie
+    jawne = {x.casefold() for x in re.findall(r"«([^»]+?)…?»", s)}
+    for w in re.findall(r"[^\W\d_]{3,}", value):
+        cf = w.casefold()
+        if cf not in jawne and not any(cf == j or cf.startswith(j) for j in jawne) and cf in s.casefold():
+            return "[ukryty: bezpiecznik]"
+    return s
+
+
+def flagi_wartosci(value: str) -> str:
+    """Cechy wartości istotne dla reguły typu (bez treści)."""
+    f = []
+    if EMAIL_RE.search(value): f.append("email")
+    if re.search(r"(?i)www\.|https?://|\b[\w-]+\.(pl|com|eu|org|net|edu)\b", value) and "email" not in f:
+        f.append("domena")
+    if re.search(r"[()\[\]]", value): f.append("nawias")
+    if re.search(r"\s-\s", value): f.append("myslnik_ze_spacjami")
+    if re.search(r"\s+\|\s+|;", value): f.append("wiele_czesci")
+    if re.search(r"\d", value): f.append("cyfry")
+    if re.search(r"[._]", value) and not f.count("email") and not f.count("domena"): f.append("kropka_podkreslnik")
+    if ORG_RE.search(value) or ORG_SKROTY_RE.search(value): f.append("regula_org")
+    return ",".join(f)
+
+
 # ---------- extract ----------
 
 DROP_PREFIXES = ("ZIP:", "System:FileAccessDate", "System:FileInodeChangeDate",
@@ -215,22 +303,27 @@ def uruchom_exiftool(exe, files):
         sys.exit("[x] Nie udało się sparsować wyjścia exiftool:\n" + res.stderr)
 
 
+def wartosci_osobowe(data):
+    """Generator (klucz, wartość) dla niepustych pól osobowych — wspólny dla --podglad i --ksztalty."""
+    for d in data:
+        for k, v in d.items():
+            if k.startswith(DROP_PREFIXES) or not czy_osobowy(k):
+                continue
+            s = to_str(v)
+            if s:
+                yield k, s
+
+
 def podglad(data):
     """Tryb --podglad: typy wartości pól osobowych na terminal. Nic nie zapisuje i nic nie usuwa.
     UWAGA: wypisuje JAWNE wartości — tylko do przejrzenia lokalnie (| less), nie zapisywać, nie wysyłać."""
     import collections
     licz = collections.Counter()                      # typ -> liczba wystąpień
     wart = collections.defaultdict(lambda: [0, set(), ""])   # wartość -> [liczba, tagi, typ]
-    for d in data:
-        for k, v in d.items():
-            if k.startswith(DROP_PREFIXES) or not czy_osobowy(k):
-                continue
-            s = to_str(v)
-            if not s:
-                continue
-            t = typ_wartosci(s)
-            licz[t] += 1
-            w = wart[s]; w[0] += 1; w[1].add(k); w[2] = t
+    for k, s in wartosci_osobowe(data):
+        t = typ_wartosci(s)
+        licz[t] += 1
+        w = wart[s]; w[0] += 1; w[1].add(k); w[2] = t
     print(f"### PODGLĄD (nic nie zapisano): {len(data)} plików, {sum(licz.values())} wartości w polach osobowych")
     for t in sorted(TYPY_RANGA, key=TYPY_RANGA.get, reverse=True):
         print(f"   {t:12s} {licz[t]:6d} wystąpień, {sum(1 for w in wart.values() if w[2] == t):5d} unikalnych")
@@ -240,6 +333,32 @@ def podglad(data):
         for s, (n, tagi, tt) in sorted(wart.items(), key=lambda x: (-x[1][0], x[0])):
             if tt == t:
                 print(f"{n:5d}  {s[:80]:80s}  {','.join(sorted(tagi))[:60]}")
+
+
+def ksztalty(data):
+    """Tryb --ksztalty: dla każdej pary (typ, kształt) liczba wystąpień, liczba różnych wartości, flagi i tagi.
+    Wypisuje WYŁĄCZNIE kształty (bez jawnych wartości) — wynik można przekazać dalej. Nic nie zapisuje."""
+    import collections
+    grupy = collections.defaultdict(lambda: {"n": 0, "wartosci": set(), "tagi": set(), "flagi": set()})
+    for k, s in wartosci_osobowe(data):
+        t = typ_wartosci(s)
+        g = grupy[(t, ksztalt(s)[:70])]
+        g["n"] += 1; g["wartosci"].add(s); g["tagi"].add(k)       # pełny klucz Grupa:Tag (np. PostScript:Creator)
+        g["flagi"].update(x for x in flagi_wartosci(s).split(",") if x)
+    licz = collections.Counter()
+    for (t, _), g in grupy.items():
+        licz[t] += g["n"]
+    print(f"### KSZTAŁTY (bez jawnych wartości, można przekazać): {len(data)} plików, "
+          f"{sum(licz.values())} wartości w polach osobowych")
+    print("### legenda: Aa = Wielka+małe, aa = małe, A/a = 1 litera, AA = 2–4 wielkie, AA+ = ≥5 wielkich, "
+          "aA = mieszane, 9 = cyfry, «x» = słowo ogólne / rdzeń / skrót / domena")
+    for t in sorted(TYPY_RANGA, key=TYPY_RANGA.get, reverse=True):
+        wiersze = sorted(((k[1], g) for k, g in grupy.items() if k[0] == t), key=lambda x: (-x[1]["n"], x[0]))
+        print(f"\n== {t} ({licz[t]} wystąpień)")
+        print(f"{'n':>5} {'uniq':>4}  {'kształt':40s}  {'flagi':32s}  tagi")
+        for kszt, g in wiersze:
+            print(f"{g['n']:5d} {len(g['wartosci']):4d}  {kszt:40s}  {','.join(sorted(g['flagi']))[:32]:32s}  "
+                  f"{','.join(sorted(g['tagi']))[:90]}")
 
 
 def cmd_extract(a):
@@ -260,6 +379,8 @@ def cmd_extract(a):
                     manifest[row["plik"]] = row
 
     data = uruchom_exiftool(exe, files)
+    if a.ksztalty:
+        return ksztalty(data)
     if a.podglad:
         return podglad(data)
 
@@ -366,16 +487,19 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--in", dest="inp", required=True)
     p.add_argument("--manifest", help="CSV z kolumnami plik,url[,instytucja]")
-    p.add_argument("--out", help="CSV wynikowy (wymagany, chyba że --podglad)")
+    p.add_argument("--out", help="CSV wynikowy (wymagany, chyba że --podglad lub --ksztalty)")
     p.add_argument("--long", help="opcjonalny CSV w formacie długim (plik, tag, wartość)")
     p.add_argument("--key-file", default=DOMYSLNY_KLUCZ, help="klucz HMAC (poza katalogiem danych)")
     p.add_argument("--keep-files", action="store_true", help="NIE usuwaj surowych plików po ekstrakcji (tylko do debugowania)")
-    p.add_argument("--podglad", action="store_true",
-                   help="tylko podgląd typów wartości pól osobowych na terminal (JAWNE wartości; nic nie zapisuje ani nie usuwa)")
+    tryb = p.add_mutually_exclusive_group()
+    tryb.add_argument("--podglad", action="store_true",
+                      help="tylko podgląd typów wartości pól osobowych na terminal (JAWNE wartości; nic nie zapisuje ani nie usuwa)")
+    tryb.add_argument("--ksztalty", action="store_true",
+                      help="tylko zamaskowane kształty wartości pól osobowych (bez jawnych wartości; nic nie zapisuje ani nie usuwa)")
     p.add_argument("--allow-missing-zip", action="store_true", help="nie przerywaj, gdy brak Archive::Zip")
     a = p.parse_args()
-    if not a.out and not a.podglad:
-        p.error("--out jest wymagany (poza trybem --podglad)")
+    if not a.out and not (a.podglad or a.ksztalty):
+        p.error("--out jest wymagany (poza trybami --podglad i --ksztalty)")
     try:
         cmd_extract(a)
     except BrokenPipeError:                       # np. wyjście z `less` przed końcem podglądu
