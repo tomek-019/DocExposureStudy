@@ -21,14 +21,17 @@ Przykład:
 import argparse, collections, csv, re, sys
 from pathlib import Path
 
-WERSJA_REGUL = "1.0"
+WERSJA_REGUL = "1.1"   # 1.1 (2026-10-28): poprawka HOST_RE (fałszywe trafienia WZR-03 na wersjach)
 
 # Jawna wersja oprogramowania: numer z kropką albo rok wydania (decyzja 2026-10-28, np. „Word 2016”).
 WERSJA_RE = r"\d+\.\d+|\b(?:19|20)\d{2}\b"
 # Nazwa pliku roboczego w tytule/temacie (np. „Microsoft Word - pismo_v3.docx”), decyzja 2026-10-28.
 NAZWA_PLIKU_RE = r"^Microsoft (?:Word|Excel|PowerPoint) - |\.(?:docx?|xlsx?|pptx?|odt|rtf|pdf)\b"
 EMAIL_PSEUD_RE = r"\bE-[0-9a-f]{10}@"                        # e-mail po pseudonimizacji w extract.py
-HOST_RE = r"(?i)\b[\w-]+\.(?:local|lan|corp|intranet|internal)\b|\b(?:10|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b"
+# 2026-10-28 poprawka: IP wymaga 4 oktetów i nie może być częścią dłuższego ciągu (wcześniej „10.1.16” z wersji
+# programu dawało fałszywe R3 — 22 trafienia w pełnej próbie)
+HOST_RE = (r"(?i)\b[\w-]+\.(?:local|lan|corp|intranet|internal)\b"
+           r"|(?<![\d.])(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?![\d.]|\.\d)")
 
 POLA_OSOBOWE = ("autor", "ostatnio_zapisal", "prawa_autorskie", "wlasciciel_urzadzenia")
 POLA_DAT = ("data_utworzenia", "data_modyfikacji", "data_metadanych", "data_wydruku")
