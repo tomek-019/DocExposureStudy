@@ -225,7 +225,47 @@ def to_str(v) -> str:
         return " | ".join(to_str(x) for x in v)
     if isinstance(v, dict):
         return json.dumps(v, ensure_ascii=False)
-    return "" if v is None else dekoduj_napis_pdf(str(v))
+    return "" if v is None else napraw_utf8(dekoduj_napis_pdf(str(v)))
+
+
+# ---------- UTF-8 odczytany jako PDFDocEncoding (problem wykryty 2026-10-28 w tytułach) ----------
+# Generator zapisał napis w UTF-8 bez znacznika kodowania, czytnik zinterpretował bajty jako PDFDocEncoding:
+# „zaÅ‡” = „zał” (C5 82), „podjÄŽte” = „podjęte” (C4 99). Czasem dwukrotnie („Ã—â•fi” -> „Ä–” -> „ą”).
+# Odwracamy: znaki -> bajty wg PDFDocEncoding -> ścisły UTF-8. Gdy bajty nie są poprawnym UTF-8 (zwykły
+# polski tekst, np. „łódź” -> F3 9B… ), wartość zostaje bez zmian. Na koniec NFC: „s”+akcent (zapis rozłożony,
+# m.in. macOS) -> „ś”, żeby ta sama wartość dawała ten sam pseudonim.
+import unicodedata
+_PDFDOC_SPEC = {  # PDFDocEncoding: kody, które różnią się od Latin-1 (0x18–0x1F, 0x80–0xA0)
+    0x18: "˘", 0x19: "ˇ", 0x1A: "ˆ", 0x1B: "˙", 0x1C: "˝", 0x1D: "˛", 0x1E: "˚", 0x1F: "˜",
+    0x80: "•", 0x81: "†", 0x82: "‡", 0x83: "…", 0x84: "—", 0x85: "–", 0x86: "ƒ", 0x87: "⁄", 0x88: "‹",
+    0x89: "›", 0x8A: "−", 0x8B: "‰", 0x8C: "„", 0x8D: "“", 0x8E: "”", 0x8F: "‘", 0x90: "’", 0x91: "‚",
+    0x92: "™", 0x93: "ﬁ", 0x94: "ﬂ", 0x95: "Ł", 0x96: "Œ", 0x97: "Š", 0x98: "Ÿ", 0x99: "Ž", 0x9A: "ı",
+    0x9B: "ł", 0x9C: "œ", 0x9D: "š", 0x9E: "ž", 0xA0: "€",
+}
+_ZNAK_NA_BAJT = {c: b for b, c in _PDFDOC_SPEC.items()}
+_ZNAK_NA_BAJT.update({chr(b): b for b in range(0xA1, 0x100) if b != 0xAD})
+_UTF8_WIELOBAJT = re.compile(rb"[\xc2-\xf4][\x80-\xbf]")
+licznik_utf8 = 0                                 # raportowany na końcu ekstrakcji
+
+
+def napraw_utf8(s: str) -> str:
+    global licznik_utf8
+    oryg, wynik = s, s
+    for _ in range(3):                           # podwójne kodowanie bywa w danych; więcej przebiegów nie trzeba
+        if wynik.isascii():
+            break
+        try:
+            bajty = bytes(ord(c) if ord(c) < 0x80 else _ZNAK_NA_BAJT[c] for c in wynik)
+            nowy = bajty.decode("utf-8")         # ścisły: zwykły tekst nie przejdzie
+        except (KeyError, UnicodeDecodeError):
+            break
+        if not _UTF8_WIELOBAJT.search(bajty) or nowy == wynik:
+            break
+        wynik = nowy
+    wynik = unicodedata.normalize("NFC", wynik)
+    if wynik != oryg:
+        licznik_utf8 += 1
+    return wynik
 
 
 # ---------- napisy PDF zapisane dosłownie (problem wykryty 2026-10-27 trybem --ksztalty) ----------
@@ -572,6 +612,9 @@ def cmd_extract(a):
 
     if n_warunkowe_jawne:
         print(f"[i] {n_warunkowe_jawne} wartości z {sorted(WARUNKOWE)} pozostawiono jawnie (typ inny niż osoba)",
+              file=sys.stderr)
+    if licznik_utf8:
+        print(f"[i] naprawiono {licznik_utf8} wartości: UTF-8 odczytany jako PDFDocEncoding lub zapis rozłożony (NFC)",
               file=sys.stderr)
     if licznik_zdekodowanych:
         print(f"[i] zdekodowano {licznik_zdekodowanych} wartości zapisanych jako napis PDF (UTF-16 ósemkowo)",
