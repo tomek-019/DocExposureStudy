@@ -61,6 +61,8 @@ ZASLEPKI = {
     "admin", "administrator", "user", "użytkownik", "uzytkownik", "owner", "właściciel", "wlasciciel",
     "autor", "author", "imię i nazwisko", "imie i nazwisko", "name", "unknown", "nieznany", "default",
     "guest", "gość", "gosc", "test", "windows user", "microsoft office user", "użytkownik systemu windows",
+    # 2026-10-28 (weryfikacja „nieustalone” na pełnej próbie):
+    "system pdf", "oem", "private", "pracownik", "pracownik organizacji",
 }
 # Słowa, których obecność w części oznacza zaślepkę (2026-10-27: „Unknown Creator”, „your user name”, „Dell User”).
 ZASLEPKI_SLOWA = {"unknown", "user", "username", "name", "użytkownik", "uzytkownik", "nieznany", "nieznana"}
@@ -72,12 +74,14 @@ ORG_RE = re.compile(
     r"ochron[aay]\s+[śs]rodowisk|kadr[ya]?\b|ksi[eę]gowo[śs]|promocj|sekcj|zarz[aą]d\b|redakcj|"
     # stanowiska (decyzja 2026-10-27, opcja A): wartość opisuje urząd, nie osobę — typ „organizacja”
     # „wójt” tylko jako całe słowo (z odmianą): bez tego „wojtek.xxx” (login z imieniem) wpadał w organizację
-    r"burmistrz|w[oó]jt(a|em|owi|ów|y)?\b|starost|prezydent|dyrektor|kierownik|so[lł]tys|prezes|sekretarz|skarbnik)"
+    r"burmistrz|w[oó]jt(a|em|owi|ów|y)?\b|starost|prezydent|dyrektor|kierownik|so[lł]tys|prezes|sekretarz|skarbnik|"
+    # 2026-10-28: jednostki i stanowiska uczelni z weryfikacji „nieustalone”
+    r"dziekanat|bibliotek)"
     r"|\bsp\.?\s*z\s*o\.?\s*o\b|\bs\.\s?a\.?(\s|$)|\b(ltd|inc|gmbh|llc|corp)\b\.?"
     r"|www\.|\.(pl|com|eu|org|net|edu)\b"
 )
 # Typowe skróty nazw jednostek (z rozróżnieniem wielkości liter, np. „UG Xyz”, „ZS nr 1”).
-ORG_SKROTY_RE = re.compile(r"\b(UG|UM|UMiG|UMIG|US|SP|ZS|ZSP|ZSZ|MOPS|GOPS|MGOPS|GOK|MOK|OSP|BIP|PUP|ZUS|ZGK|ZDP|PSP)\b")
+ORG_SKROTY_RE = re.compile(r"\b(UG|UM|UMiG|UMIG|US|RCL|SP|ZS|ZSP|ZSZ|MOPS|GOPS|MGOPS|GOK|MOK|OSP|BIP|PUP|ZUS|ZGK|ZDP|PSP)\b")
 # Elementy wycinane przed klasyfikacją (np. „© 2021 Jan Kowalski” -> „Jan Kowalski”).
 OCZYSC_RE = re.compile(
     r"(?i)©|\(c\)|\bcopyright\b|\ball rights reserved\b|\bwszelkie prawa zastrzeżone\b|\b(19|20)\d\d\b"
