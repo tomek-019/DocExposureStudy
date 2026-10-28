@@ -180,6 +180,15 @@ def typ_wartosci(value: str) -> str:
     czesci = [c for c in podziel_poza_nawiasami(value) if c.strip(SEPARATORY)] or [value]
     return max((t for c in czesci for t in typy_czesci(c)), key=TYPY_RANGA.get)
 
+# Ścieżka bezwzględna / udział sieciowy (decyzja 2026-10-28): flaga liczona na PRAWDZIWEJ wartości przed
+# pseudonimizacją — inaczej ścieżka w polu osobowym (np. MS-DOC:LastSavedBy „Jan Kowalski (C:\...)”) znika w P-….
+# Zapisywana jest tylko flaga, nigdy ścieżka. Reguła WZR-01 (R3) w classify.py.
+SCIEZKA_RE = re.compile(r"(?i)(?:^|[\s(\"'=])(?:[a-z]:\\|\\\\[\w.$-]+\\|/(?:home|users|mnt|media|srv|var)/)|file://")
+
+
+def zawiera_sciezke(s: str) -> bool:
+    return bool(SCIEZKA_RE.search(s))
+
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 # Ścieżki z nazwą użytkownika: C:\Users\jkowalski\..., C:\Documents and Settings\x\..., /home/x/, /Users/x/
 USERPATH_RE = re.compile(
@@ -572,10 +581,13 @@ def cmd_extract(a):
         pseud_fields = []
         typy = {}
         tags = {}
+        sciezki = set()                                  # klucze tagów, których prawdziwa wartość zawiera ścieżkę
         for k, v in d.items():
             if k.startswith(DROP_PREFIXES):
                 continue
             s = to_str(v)
+            if s and zawiera_sciezke(s):
+                sciezki.add(k)                           # przed pseudonimizacją; zapisujemy tylko flagę
             if s and czy_osobowy(k) and k in WARUNKOWE and typ_wartosci(s) != "osoba":
                 s, ch = scrub_text(key, s)               # program: zostaje jawny (e-maile/ścieżki nadal czyszczone)
                 if ch: pseud_fields.append(k)
@@ -596,13 +608,15 @@ def cmd_extract(a):
         row["n_niepustych"] = sum(1 for v in tags.values() if v != "")
         row["pola_pseudonimizowane"] = ";".join(pseud_fields)
         row["typy_wartosci"] = ";".join(f"{k}={t}" for k, t in typy.items())
+        row["tagi_ze_sciezka"] = ";".join(sorted(sciezki))
         row.update(tags)
         all_cols.update(tags)
         rows.append(row)
         for k, v in tags.items():
             long_rows.append({"plik": rel, "url": row["url"], "instytucja": row["instytucja"],
                               "grupa": k.split(":", 1)[0], "tag": k.split(":", 1)[-1], "wartosc": v,
-                              "pseudonimizowane": int(k in pseud_fields), "typ_wartosci": typy.get(k, "")})
+                              "pseudonimizowane": int(k in pseud_fields), "typ_wartosci": typy.get(k, ""),
+                              "sciezka": int(k in sciezki)})
 
     if zip_warn:
         print("[!] UWAGA: exiftool nie ma Archive::Zip — metadane DOCX/XLSX/PPTX NIE zostały odczytane.\n"
@@ -625,7 +639,7 @@ def cmd_extract(a):
         print(f"[!] {len(missing_url)} plików bez URL w manifeście: {', '.join(missing_url[:5])}...", file=sys.stderr)
 
     fixed = ["plik", "sha256", "url", "instytucja", "exiftool_ver", "z_archiwum", "data_w_archiwum", "n_tagow",
-             "n_niepustych", "pola_pseudonimizowane", "typy_wartosci"]
+             "n_niepustych", "pola_pseudonimizowane", "typy_wartosci", "tagi_ze_sciezka"]
     # Dopisywanie do istniejących wyników (pliki są usuwane po ekstrakcji, więc kolejne partie trzeba łączyć)
     out_p = Path(a.out)
     new_names = {r["plik"] for r in rows}
@@ -644,7 +658,7 @@ def cmd_extract(a):
     print(f"[+] {len(rows)} plików łącznie -> {out_p} ({len(cols)} kolumn)", file=sys.stderr)
     if a.long:
         lp = Path(a.long)
-        lf = ["plik", "url", "instytucja", "grupa", "tag", "wartosc", "pseudonimizowane", "typ_wartosci"]
+        lf = ["plik", "url", "instytucja", "grupa", "tag", "wartosc", "pseudonimizowane", "typ_wartosci", "sciezka"]
         if lp.exists():
             with open(lp, encoding="utf-8-sig") as f:
                 long_rows = [r for r in csv.DictReader(f) if r["plik"] not in new_names] + long_rows

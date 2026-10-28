@@ -415,12 +415,14 @@ def main():
     with open(a.long, encoding="utf-8-sig", newline="") as f:
         for r in csv.DictReader(f):
             p = pliki.setdefault(r["plik"], {"meta": {"url": r["url"], "instytucja": r["instytucja"]},
-                                             "tagi": {}, "typy": {}})
+                                             "tagi": {}, "typy": {}, "sciezki": []})
             if r["wartosc"].strip():
                 k = f"{r['grupa']}:{r['tag']}"
                 p["tagi"][k] = r["wartosc"]
                 if r.get("typ_wartosci"):            # kolumna od extract.py z 2026-10-26; starsze CSV jej nie mają
                     p["typy"][k] = r["typ_wartosci"]
+                if r.get("sciezka") == "1":          # flaga ścieżki z extract.py (od 2026-10-28), liczona przed HMAC
+                    p["sciezki"].append(k)
     meta_s = {}
     if a.szeroki:
         with open(a.szeroki, encoding="utf-8-sig", newline="") as f:
@@ -452,10 +454,11 @@ def main():
                                       if pole != "format" and (w.get(pole) not in ("", None) if rodzaj != "data"
                                                                else w.get(f"{pole}_lokalna") or w.get(f"{pole}_surowa")))
         w["rozbiezne_pola"] = ";".join(k[:-len("_rozbiezne")] for k, v in w.items() if k.endswith("_rozbiezne") and v)
+        w["tagi_ze_sciezka"] = ";".join(sorted(d["sciezki"]))
         wyniki.append({"plik": plik, **d["meta"], **meta_s.get(plik, {}), "wersja_mapy": WERSJA_MAPY, **w})
 
     stale = ["plik", "instytucja", "url", "sha256", "z_archiwum", "data_w_archiwum", "wersja_mapy",
-             "n_pol_kanonicznych", "rozbiezne_pola", "znaczniki"]
+             "n_pol_kanonicznych", "rozbiezne_pola", "znaczniki", "tagi_ze_sciezka"]
     kol = stale + kolumny_pol()
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     with open(a.out, "w", encoding="utf-8-sig", newline="") as f:
