@@ -27,6 +27,7 @@ Narzędzie badawcze przygotowane na potrzeby pracy inżynierskiej pt. *„Analiz
 | `tools/discover.py` | wyszukiwanie dokumentów i losowanie próby |
 | `tools/fetch.py` | pobieranie plików |
 | `tools/extract.py` | odczyt metadanych, pseudonimizacja, usunięcie plików |
+| `tools/pdf_versions.py` | odczyt wcześniejszych wersji PDF i porównanie z najnowszą |
 | `tools/normalize.py` | ujednolicenie metadanych do wspólnych pól |
 | `tools/audit.py` | kontrola zgodności zapytań z zasadami |
 | `tools/common.py` | User-Agent, robots.txt, limit tempa, log zapytań |
