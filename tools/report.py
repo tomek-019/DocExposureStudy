@@ -16,7 +16,8 @@ RQ2 — elementy profilu instytucji (zamknięta lista P1–P6, dziennik 2026-11-
 
 RQ3 — poziom zawartości metadanych dokumentu (dziennik 2026-11-08):
   pelne        pole osobowe o typie osoba/login/email/organizacja albo niepuste pole firma
-  czesciowe    brak powyższych, ale jest oprogramowanie lub czas, albo zaślepka (flaga_zaslepka=1)
+  czesciowe    brak powyższych, ale jest oprogramowanie, czas lub urządzenie, albo zaślepka (flaga_zaslepka=1)
+               (urządzenie dodane 2026-11-08: obraz z samym producentem/modelem nie jest „minimalny”)
   minimalne    pozostałe (tylko cechy formatu albo brak metadanych)
   nieustalone  plik z uszkodzoną strukturą (błąd ExifTool w wyniki_long.csv albo lista --uszkodzone)
 
@@ -37,6 +38,7 @@ POLA_OPROG = ("program_tworzacy", "program_pdf", "wersja_aplikacji", "program_ed
               "biblioteka_xmp", "system", "historia_programy")
 POLA_CZASU_DATY = ("data_utworzenia", "data_modyfikacji", "data_metadanych", "data_wydruku")
 POLA_CZASU_INNE = ("czas_edycji_min", "liczba_rewizji", "historia_daty")
+POLA_URZADZEN = ("urzadzenie_producent", "urzadzenie_model", "obiektyw", "numer_seryjny", "firmware")
 WYNIKI_P3 = ("zmiana_na_nowsza", "bez_zmiany", "niejednoznaczne", "za_malo_danych")
 POZIOMY = ("pelne", "czesciowe", "minimalne", "nieustalone")
 RE_USZKODZONY = re.compile(r"xref|root object", re.I)       # komunikaty ExifTool dla 10 uszkodzonych PDF
@@ -137,7 +139,8 @@ def poziom(w, uszkodzone):
     oprog = any(niepuste(w, p) for p in POLA_OPROG)
     czas = any(niepuste(w, p + "_lokalna") or niepuste(w, p + "_surowa") for p in POLA_CZASU_DATY) \
         or any(niepuste(w, p) for p in POLA_CZASU_INNE)
-    if oprog or czas or zaslepka:
+    urzadzenie = any(niepuste(w, p) for p in POLA_URZADZEN)
+    if oprog or czas or urzadzenie or zaslepka:
         return "czesciowe", zaslepka
     return "minimalne", 0
 
