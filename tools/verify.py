@@ -5,7 +5,18 @@ verify.py — etap WERYFIKACJI TRAFNOŚCI klasyfikacji (krok 5 harmonogramu v3, 
 Podkomendy:
   draw    (wersja 1) losowanie próbki i przygotowanie ponownego pobrania
   check   (wersja 2) porównanie sha256 pobranych plików z pełną próbą i wybór końcowej próbki
-Kolejne (formularz oceny, precyzja i czułość) w następnych wersjach.
+  formularz (wersja 3) formularz oceny ocena.csv: wiersz na znalezisko (bez wartości) + kontrola pominięć
+  pokaz     (wersja 3) podgląd dokumentu na terminal: JAWNE tagi exiftool, ich pola kanoniczne, znaleziska
+Kolejna (precyzja i czułość z wypełnionego formularza) w następnej wersji.
+
+Kryteria oceny (decyzje 2026-11-10):
+  ocena = T   reguła zadziałała zgodnie z definicją w taksonomii v1 (kategoria i wrażliwość przyjęte z taksonomii);
+              OSB-01–06: typ wartości poprawny; gdy N — poprawny typ w kolumnie „poprawne”
+  uwagi       zastrzeżenia do samej taksonomii (nie wchodzą do liczb)
+  pominięcie  dopisany wiersz typ_wiersza=pominiecie (nr, id_reguly, która powinna zadziałać, pole, zrodlo = tag):
+              informacja w metadanych, którą taksonomia przewiduje, a znaleziska brak (do czułości)
+  spoza       dopisany wiersz typ_wiersza=spoza (nr, zrodlo, uwagi): informacja spoza taksonomii (tylko uwagi)
+  <nr>-P      ocena = T po sprawdzeniu dokumentu pod kątem pominięć (także gdy pominięć nie ma)
 
 Próbka (decyzje 2026-11-10):
   część losowa    losowanie warstwowe wg instytucji: --n (domyślnie 5) dokumentów + --rezerwa (domyślnie 2)
@@ -32,6 +43,9 @@ Wyjście check: porownanie.csv (status każdego pliku: zgodny / inny_sha256 / ni
 
 Przykład:
   python3 tools/verify.py check --dokumenty dane/proba/dokumenty.csv --out dane/weryfikacja
+  python3 tools/verify.py formularz --znaleziska dane/proba/znaleziska.csv --out dane/weryfikacja
+  python3 tools/verify.py pokaz --nr 1 --dokumenty dane/proba/dokumenty.csv \\
+                               --znaleziska dane/proba/znaleziska.csv --out dane/weryfikacja | less -S
   python3 tools/verify.py draw --dokumenty dane/proba/dokumenty.csv --long dane/proba/wyniki_long.csv \\
                                --proba-dir dane/proba --out dane/weryfikacja
 """
@@ -297,9 +311,148 @@ def cmd_check(a):
         print(f"[!] poniżej {min_typ} wartości: {', '.join(za_malo)}", file=sys.stderr)
 
 
+# ---------- wersja 3: formularz oceny i podgląd dokumentu (kryteria: decyzje 2026-11-10) ----------
+# Znalezisko trafne (T) = reguła zadziałała zgodnie ze swoją definicją w taksonomii v1: wartość jest tym, co zakłada
+# reguła (np. OPR-01 program z wersją, OSB-02 login), a pole kanoniczne wzięło właściwą wartość. Kategoria i wrażliwość
+# reguły są przyjęte z taksonomii; zastrzeżenia do taksonomii -> kolumna uwagi (nie wchodzą do liczb).
+# Pominięcie (do czułości) = informacja w metadanych pliku, którą taksonomia przewiduje, a znaleziska brak.
+# Informacje spoza taksonomii -> wiersz „spoza” (tylko uwagi, nie wchodzą do liczb).
+# OSB-01–06 (typ wartości pola osobowego): ocena = czy typ poprawny; gdy N — poprawny typ w kolumnie „poprawne”.
+# „nieustalone” jest trafne, gdy z samej wartości nie da się rzetelnie przypisać żadnego innego typu.
+REGULY_TYPU = {"OSB-01": "osoba", "OSB-02": "login", "OSB-03": "email", "OSB-04": "organizacja",
+               "OSB-05": "nieustalone", "OSB-06": "zaslepka"}
+KOLUMNY_OCENY = ["id_wiersza", "nr", "czesc", "typ_wiersza", "plik", "format", "id_reguly", "pole", "zrodlo",
+                 "kategoria", "wrazliwosc", "ocena", "poprawne", "uwagi"]
+
+
+def wczytaj_wybrane(out):
+    """Końcowa próbka z check; nr = pozycja w wybrane.csv (ta sama w formularzu i podglądzie)."""
+    with open(Path(out) / "wybrane.csv", encoding="utf-8-sig", newline="") as f:
+        return [dict(r, nr=i) for i, r in enumerate(csv.DictReader(f), 1)]
+
+
+def cmd_formularz(a):
+    out = Path(a.out)
+    cel = out / "ocena.csv"
+    if cel.exists() and not a.nadpisz:
+        sys.exit(f"[x] {cel} już istnieje — nie nadpisuję wypełnianego formularza (--nadpisz, jeśli pusty)")
+    wybrane = wczytaj_wybrane(out)
+    with open(a.znaleziska, encoding="utf-8-sig", newline="") as f:
+        zn = collections.defaultdict(list)
+        for z in csv.DictReader(f):
+            zn[z["plik"]].append(z)
+    wiersze = []
+    for r in wybrane:
+        zs = zn.get(r["plik"], [])
+        if r["czesc"] == "celowana":                 # tylko precyzja typu: wartości celowanego typu
+            zs = [z for z in zs if REGULY_TYPU.get(z["id_reguly"]) == r["typ_celowany"]]
+        for j, z in enumerate(zs, 1):
+            wiersze.append({"id_wiersza": f"{r['nr']:02d}-{j:02d}", "nr": r["nr"], "czesc": r["czesc"],
+                            "typ_wiersza": "znalezisko", "plik": r["plik"], "format": z.get("format", ""),
+                            "id_reguly": z["id_reguly"], "pole": z["pole"], "zrodlo": z["zrodlo"],
+                            "kategoria": z["kategoria"], "wrazliwosc": z["wrazliwosc"],
+                            "ocena": "", "poprawne": "", "uwagi": ""})
+        if r["czesc"] == "losowa":                   # potwierdzenie, że dokument sprawdzono pod kątem pominięć
+            wiersze.append({"id_wiersza": f"{r['nr']:02d}-P", "nr": r["nr"], "czesc": r["czesc"],
+                            "typ_wiersza": "kontrola_pominiec", "plik": r["plik"], "ocena": "", "uwagi": ""})
+    with open(cel, "w", encoding="utf-8-sig", newline="") as f:
+        wr = csv.DictWriter(f, fieldnames=KOLUMNY_OCENY, restval=""); wr.writeheader(); wr.writerows(wiersze)
+    c = collections.Counter(w["czesc"] for w in wiersze if w["typ_wiersza"] == "znalezisko")
+    print(f"[+] formularz -> {cel}: dokumentów {len(wybrane)}, znalezisk do oceny: losowa {c['losowa']}, "
+          f"celowana {c['celowana']}; wierszy kontroli pominięć {sum(1 for r in wybrane if r['czesc'] == 'losowa')}",
+          file=sys.stderr)
+
+
+def cmd_pokaz(a):
+    """JAWNE wartości tylko na terminal: tagi exiftool dokumentu nr, pola kanoniczne i znaleziska. Nic nie zapisuje
+    poza plikiem tymczasowym (plik z ZIP), usuwanym od razu."""
+    import fnmatch, shutil, tempfile, zipfile
+    import extract, normalize                       # te same funkcje dekodowania i ta sama mapa pól co w potoku
+    out = Path(a.out)
+    wybrane = {r["nr"]: r for r in wczytaj_wybrane(out)}
+    if a.nr not in wybrane:
+        sys.exit(f"[x] brak dokumentu nr {a.nr} (zakres 1–{len(wybrane)})")
+    r = wybrane[a.nr]
+    with open(a.dokumenty, encoding="utf-8-sig", newline="") as f:
+        dok = next((w for w in csv.DictReader(f) if w["plik"] == r["plik"]), {})
+    with open(a.znaleziska, encoding="utf-8-sig", newline="") as f:
+        zn = [z for z in csv.DictReader(f) if z["plik"] == r["plik"]]
+
+    exe, _ = extract.check_exiftool()
+    tmp = None
+    try:
+        sciezka = Path(r["lokalny_plik"])
+        if r["w_archiwum"]:
+            tmp = Path(tempfile.mkdtemp(prefix="weryf_"))
+            with zipfile.ZipFile(sciezka) as z, z.open(r["w_archiwum"]) as src, open(tmp / "plik", "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            sciezka = tmp / "plik"
+        dane = extract.uruchom_exiftool(exe, [sciezka])[0]
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    # do którego pola kanonicznego trafia tag (★ = źródło wybrane w dokumenty.csv), czy jest ignorowany
+    zrodla = {}
+    for pole, _, wzorce in normalize.MAPA:
+        for wz in wzorce:
+            zrodla.setdefault(wz, []).append(pole)
+    wybrane_zr = {dok.get(f"{p}_zrodlo"): p for p, _, _ in normalize.MAPA if dok.get(f"{p}_zrodlo")}
+
+    def opis_tagu(k):
+        pola = sorted({p for wz, ps in zrodla.items() if fnmatch.fnmatchcase(k, wz) for p in ps})
+        if k in wybrane_zr:
+            return f"★ {wybrane_zr[k]}"
+        if pola:
+            return "→ " + ",".join(pola)
+        if any(fnmatch.fnmatchcase(k, w) for _, ws in normalize.ZNACZNIKI for w in ws):
+            return "znacznik"
+        return "ign" if normalize.pasuje(k, normalize.IGNOROWANE) else "?"
+
+    print(f"### DOKUMENT nr {a.nr} [{r['czesc']}{(' / ' + r['typ_celowany']) if r['typ_celowany'] else ''}] "
+          f"{dok.get('format', '')}  — JAWNE WARTOŚCI: nie zapisuj, nie wysyłaj")
+    print("\n== tagi exiftool (★ = źródło pola kanonicznego, → = inne źródło pola, ign = ignorowany, "
+          "[typ] = typ wartości liczony teraz, [ścieżka] = flaga ścieżki)")
+    for k, v in sorted(dane.items()):
+        if k.startswith(extract.DROP_PREFIXES):
+            continue
+        s = extract.to_str(v)
+        if not s:
+            continue
+        znaczki = []
+        if extract.czy_osobowy(k):
+            znaczki.append(f"[{extract.typ_wartosci(s)}]")
+        if extract.zawiera_sciezke(s):
+            znaczki.append("[ścieżka]")
+        print(f"  {k:42s} {opis_tagu(k):26s} {' '.join(znaczki):14s} {s[:a.szerokosc]}")
+    print("\n== znaleziska (id_wiersza w formularzu = nr-kolejny)")
+    if r["czesc"] == "celowana":
+        zn = [z for z in zn if REGULY_TYPU.get(z["id_reguly"]) == r["typ_celowany"]]
+        print("   (część celowana: oceniasz tylko typ tych wartości)")
+    for j, z in enumerate(zn, 1):
+        print(f"  {a.nr:02d}-{j:02d}  {z['id_reguly']:7s} {z['wrazliwosc']}  {z['kategoria']:38s} "
+              f"{z['pole']:22s} {z['zrodlo']}")
+    if not zn:
+        print("   brak znalezisk")
+    if r["czesc"] == "losowa":
+        print(f"\n   pominięcia: dopisz wiersze „pominiecie” / „spoza” z nr {a.nr}; potem {a.nr:02d}-P ocena = T")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = p.add_subparsers(dest="cmd", required=True)
+    fo = sp.add_parser("formularz", help="formularz oceny ocena.csv (bez jawnych wartości)")
+    fo.add_argument("--znaleziska", required=True, help="znaleziska.csv z classify.py")
+    fo.add_argument("--out", required=True, help="katalog weryfikacji (z wybrane.csv)")
+    fo.add_argument("--nadpisz", action="store_true")
+    fo.set_defaults(func=cmd_formularz)
+    po = sp.add_parser("pokaz", help="podgląd dokumentu nr N na terminal (JAWNE wartości, nic nie zapisuje)")
+    po.add_argument("--nr", type=int, required=True)
+    po.add_argument("--dokumenty", required=True)
+    po.add_argument("--znaleziska", required=True)
+    po.add_argument("--out", required=True)
+    po.add_argument("--szerokosc", type=int, default=90, help="maks. długość wyświetlanej wartości")
+    po.set_defaults(func=cmd_pokaz)
     c = sp.add_parser("check", help="porównanie sha256 pobranych plików i wybór końcowej próbki")
     c.add_argument("--dokumenty", required=True, help="dokumenty.csv z normalize.py (te same co przy draw)")
     c.add_argument("--out", required=True, help="katalog weryfikacji (z probka.csv i losowanie.json)")
