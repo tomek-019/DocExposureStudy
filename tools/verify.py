@@ -2,8 +2,10 @@
 """
 verify.py — etap WERYFIKACJI TRAFNOŚCI klasyfikacji (krok 5 harmonogramu v3, dziennik 2026-11-10).
 
-Wersja 1: tylko losowanie próbki i przygotowanie ponownego pobrania (podkomenda `draw`).
-Kolejne podkomendy (porównanie sha256, formularz oceny, precyzja i czułość) w następnych wersjach.
+Podkomendy:
+  draw    (wersja 1) losowanie próbki i przygotowanie ponownego pobrania
+  check   (wersja 2) porównanie sha256 pobranych plików z pełną próbą i wybór końcowej próbki
+Kolejne (formularz oceny, precyzja i czułość) w następnych wersjach.
 
 Próbka (decyzje 2026-11-10):
   część losowa    losowanie warstwowe wg instytucji: --n (domyślnie 5) dokumentów + --rezerwa (domyślnie 2)
@@ -25,7 +27,11 @@ Wyjście w --out:
   losowanie.json      ziarno, data, parametry, sha256 dokumenty.csv, liczby
 Konsola: tylko liczby. probka.csv i urls.txt zawierają adresy instytucji — tylko lokalnie.
 
+Wyjście check: porownanie.csv (status każdego pliku: zgodny / inny_sha256 / niedostepny) i wybrane.csv
+(końcowa próbka). Pliki z ZIP: porównywany sha256 pliku w archiwum (jak w extract.py).
+
 Przykład:
+  python3 tools/verify.py check --dokumenty dane/proba/dokumenty.csv --out dane/weryfikacja
   python3 tools/verify.py draw --dokumenty dane/proba/dokumenty.csv --long dane/proba/wyniki_long.csv \\
                                --proba-dir dane/proba --out dane/weryfikacja
 """
@@ -179,9 +185,125 @@ def cmd_draw(a):
           f"{out / 'pobierz.sh'}", file=sys.stderr)
 
 
+ZIP_MAX_MEMBERS = 500                     # jak w extract.py (ochrona przed zip bomb)
+ZIP_MAX_TOTAL = 500 * 1024 * 1024
+
+
+def sha_czlonkow_zip(p):
+    """{sha256: nazwa w archiwum} dla plików w ZIP-ie; {} gdy to nie ZIP albo archiwum za duże."""
+    import zipfile
+    if not zipfile.is_zipfile(p):
+        return {}
+    wynik = {}
+    with zipfile.ZipFile(p) as z:
+        infos = [i for i in z.infolist() if not i.is_dir()]
+        if len(infos) > ZIP_MAX_MEMBERS or sum(i.file_size for i in infos) > ZIP_MAX_TOTAL:
+            return {}
+        for i in infos:
+            h = hashlib.sha256()
+            with z.open(i) as f:
+                for blok in iter(lambda: f.read(1 << 16), b""):
+                    h.update(blok)
+            wynik[h.hexdigest()] = i.filename
+    return wynik
+
+
+def cmd_check(a):
+    """Porównanie sha256 pobranych plików z pełną próbą i wybór końcowej próbki (rezerwa zastępuje braki)."""
+    out = Path(a.out)
+    meta = json.loads((out / "losowanie.json").read_text(encoding="utf-8"))
+    n, min_typ = meta["parametry"]["n"], meta["parametry"]["min_typ"]
+    with open(out / "probka.csv", encoding="utf-8-sig", newline="") as f:
+        probka = list(csv.DictReader(f))
+    if sha256_pliku(a.dokumenty) != meta["dokumenty_sha256"]:
+        sys.exit("[x] dokumenty.csv różni się od użytego przy losowaniu (sha256) — liczby typów byłyby niespójne")
+    with open(a.dokumenty, encoding="utf-8-sig", newline="") as f:
+        dok = {w["plik"]: w for w in csv.DictReader(f)}
+
+    # pobrane pliki: (instytucja, url) -> ścieżka lokalna (ostatni wiersz „ok” w manifeście)
+    pobrane = {}
+    for kod in sorted({r["instytucja"] for r in probka}):
+        man = out / kod / "pliki" / "manifest.csv"
+        if not man.exists():
+            print(f"[!] {kod}: brak manifestu — pliki tej instytucji niedostępne", file=sys.stderr)
+            continue
+        with open(man, encoding="utf-8", newline="") as f:
+            for m in csv.DictReader(f):
+                if m["status"] == "ok" and m["plik"] and (out / kod / "pliki" / m["plik"]).exists():
+                    pobrane[(kod, m["url"])] = out / kod / "pliki" / m["plik"]
+
+    cache_sha, cache_zip = {}, {}
+    for r in probka:
+        sciezka = pobrane.get((r["instytucja"], r["url_pobrania"]))
+        r["lokalny_plik"], r["w_archiwum"] = "", ""
+        if not sciezka:
+            r["status"] = "niedostepny"
+            continue
+        r["lokalny_plik"] = str(sciezka)
+        if r["z_archiwum"]:
+            if sciezka not in cache_zip:
+                cache_zip[sciezka] = sha_czlonkow_zip(sciezka)
+            czlonek = cache_zip[sciezka].get(r["sha256"])
+            r["status"] = "zgodny" if czlonek else "inny_sha256"
+            r["w_archiwum"] = czlonek or ""
+        else:
+            if sciezka not in cache_sha:
+                cache_sha[sciezka] = sha256_pliku(sciezka)
+            r["status"] = "zgodny" if cache_sha[sciezka] == r["sha256"] else "inny_sha256"
+
+    # ---- wybór: część losowa — pierwsze n zgodnych w kolejności (rezerwa zastępuje braki) ----
+    wybrane = []
+    for kod in sorted({r["instytucja"] for r in probka if r["czesc"] == "losowa"}):
+        rs = sorted((r for r in probka if r["czesc"] == "losowa" and r["instytucja"] == kod),
+                    key=lambda r: int(r["kolejnosc"]))
+        ok = [r for r in rs if r["status"] == "zgodny"][:n]
+        if len(ok) < n:
+            print(f"[!] {kod}: tylko {len(ok)} z {n} dokumentów zgodnych (rezerwa wyczerpana)", file=sys.stderr)
+        wybrane += ok
+    licz = {t: sum(wartosci_typu(dok[r["plik"]], t) for r in wybrane) for t in TYPY}
+    w_losowej = dict(licz)
+
+    # ---- część celowana: dobierane w kolejności, aż typ ma min_typ wartości ----
+    for t in TYPY:
+        rs = sorted((r for r in probka if r["czesc"] == "celowana" and r["typ_celowany"] == t),
+                    key=lambda r: int(r["kolejnosc"]))
+        for r in rs:
+            if licz[t] >= min_typ:
+                break
+            if r["status"] == "zgodny":
+                wybrane.append(r); licz[t] += wartosci_typu(dok[r["plik"]], t)
+
+    for r in probka:
+        r["wybrany"] = int(r in wybrane)
+    kol = KOLUMNY + ["status", "lokalny_plik", "w_archiwum", "wybrany"]
+    with open(out / "porownanie.csv", "w", encoding="utf-8-sig", newline="") as f:
+        wr = csv.DictWriter(f, fieldnames=kol); wr.writeheader(); wr.writerows(probka)
+    with open(out / "wybrane.csv", "w", encoding="utf-8-sig", newline="") as f:
+        wr = csv.DictWriter(f, fieldnames=kol); wr.writeheader(); wr.writerows(wybrane)
+
+    # ---- konsola: tylko liczby ----
+    for czesc in ("losowa", "celowana"):
+        c = collections.Counter(r["status"] for r in probka if r["czesc"] == czesc)
+        print(f"[i] {czesc}: " + ", ".join(f"{s} {c[s]}" for s in ("zgodny", "inny_sha256", "niedostepny")),
+              file=sys.stderr)
+    nl = sum(1 for r in wybrane if r["czesc"] == "losowa")
+    rez = sum(1 for r in wybrane if r["czesc"] == "losowa" and r["rezerwa"] == "1")
+    print(f"[+] wybrane: losowa {nl} (w tym z rezerwy {rez}), celowana "
+          f"{sum(1 for r in wybrane if r['czesc'] == 'celowana')} -> {out / 'wybrane.csv'}", file=sys.stderr)
+    print("[i] wartości typów (losowa / razem z celowaną): "
+          + ", ".join(f"{t} {w_losowej[t]}/{licz[t]}" for t in TYPY), file=sys.stderr)
+    za_malo = [t for t in TYPY if licz[t] < min_typ]
+    if za_malo:
+        print(f"[!] poniżej {min_typ} wartości: {', '.join(za_malo)}", file=sys.stderr)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = p.add_subparsers(dest="cmd", required=True)
+    c = sp.add_parser("check", help="porównanie sha256 pobranych plików i wybór końcowej próbki")
+    c.add_argument("--dokumenty", required=True, help="dokumenty.csv z normalize.py (te same co przy draw)")
+    c.add_argument("--out", required=True, help="katalog weryfikacji (z probka.csv i losowanie.json)")
+    c.set_defaults(func=cmd_check)
     d = sp.add_parser("draw", help="losowanie próbki do weryfikacji i listy adresów do ponownego pobrania")
     d.add_argument("--dokumenty", required=True, help="dokumenty.csv z normalize.py")
     d.add_argument("--long", help="wyniki_long.csv z extract.py (wykluczenie uszkodzonych PDF)")
