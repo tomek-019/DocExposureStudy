@@ -7,7 +7,8 @@ Podkomendy:
   check   (wersja 2) porównanie sha256 pobranych plików z pełną próbą i wybór końcowej próbki
   formularz (wersja 3) formularz oceny ocena.csv: wiersz na znalezisko (bez wartości) + kontrola pominięć
   pokaz     (wersja 3) podgląd dokumentu na terminal: JAWNE tagi exiftool, ich pola kanoniczne, znaleziska
-Kolejna (precyzja i czułość z wypełnionego formularza) w następnej wersji.
+  wyniki    (wersja 4) precyzja, czułość (z 95% przedziałem Wilsona), trafność wrażliwości, kategorii i typu
+            wartości z wypełnionego formularza -> wyniki.json, bledy.csv; konsola: tylko liczby
 
 Kryteria oceny (decyzje 2026-11-10):
   ocena = T   reguła zadziałała zgodnie z definicją w taksonomii v1 (kategoria i wrażliwość przyjęte z taksonomii);
@@ -46,6 +47,7 @@ Przykład:
   python3 tools/verify.py formularz --znaleziska dane/proba/znaleziska.csv --out dane/weryfikacja
   python3 tools/verify.py pokaz --nr 1 --dokumenty dane/proba/dokumenty.csv \\
                                --znaleziska dane/proba/znaleziska.csv --out dane/weryfikacja | less -S
+  python3 tools/verify.py wyniki --out dane/weryfikacja [--bez-niewybranych]
   python3 tools/verify.py draw --dokumenty dane/proba/dokumenty.csv --long dane/proba/wyniki_long.csv \\
                                --proba-dir dane/proba --out dane/weryfikacja
 """
@@ -438,9 +440,158 @@ def cmd_pokaz(a):
         print(f"\n   pominięcia: dopisz wiersze „pominiecie” / „spoza” z nr {a.nr}; potem {a.nr:02d}-P ocena = T")
 
 
+# ---------- wersja 4: wyniki weryfikacji (precyzja, czułość, trafność typu) ----------
+# Konwencje formularza (2026-11-10): N + puste „poprawne” = znalezisko, którego nie powinno być (tylko precyzja);
+# N + reguła (albo typ dla OSB) w „poprawne” = zła reguła zamiast właściwej (błąd precyzji reguły zastosowanej
+# i pominięcie reguły właściwej); wiersz „pominiecie” = brak znaleziska (czułość); „spoza” = poza liczbami.
+# Wiersz pominięcia z „(→)” w uwagach = informacja w niewybranym źródle pola; liczony osobno (--bez-niewybranych).
+
+def wilson(k, n, z=1.96):
+    """95% przedział Wilsona dla odsetka k/n -> (dolna, górna); (0, 0) dla n = 0."""
+    if not n:
+        return 0.0, 0.0
+    p = k / n
+    m = z * ((p * (1 - p) + z * z / (4 * n)) / n) ** 0.5
+    d = 1 + z * z / n
+    return (p + z * z / (2 * n) - m) / d, (p + z * z / (2 * n) + m) / d
+
+
+def cmd_wyniki(a):
+    import classify                                  # wrażliwość i kategoria reguł z jednego źródła (REGULY)
+    out = Path(a.out)
+    meta_reg = {r[0]: {"kategoria": r[3], "wrazliwosc": r[4]} for r in classify.REGULY}
+    reg_typu = {t: r for r, t in REGULY_TYPU.items()}
+    with open(a.ocena or out / "ocena.csv", encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    # ---- kontrola kompletności formularza ----
+    bledy = []
+    for r in rows:
+        if r["typ_wiersza"] == "znalezisko" and r["ocena"].strip().upper() not in ("T", "N"):
+            bledy.append(f"{r['id_wiersza']}: brak oceny T/N")
+        if r["typ_wiersza"] == "znalezisko" and r["ocena"].strip().upper() == "N" and r["poprawne"].strip():
+            p = r["poprawne"].strip()
+            if p not in meta_reg and p not in reg_typu:
+                bledy.append(f"{r['id_wiersza']}: nieznana wartość „poprawne”: {p}")
+        if r["typ_wiersza"] == "kontrola_pominiec" and r["ocena"].strip().upper() != "T":
+            bledy.append(f"{r['id_wiersza']}: dokument niesprawdzony pod kątem pominięć")
+        if r["typ_wiersza"] == "pominiecie" and r["id_reguly"].strip() not in meta_reg:
+            bledy.append(f"nr {r['nr']}: pominięcie bez poprawnego id_reguly")
+    if bledy:
+        print("[!] formularz niekompletny:\n    " + "\n    ".join(bledy[:20]), file=sys.stderr)
+        if not a.mimo_bledow:
+            sys.exit(1)
+
+    def regula_poprawna(r):
+        """ID reguły, która powinna była zadziałać (albo '' gdy znaleziska nie powinno być)."""
+        p = r["poprawne"].strip()
+        return reg_typu.get(p, p)
+
+    zn = [r for r in rows if r["typ_wiersza"] == "znalezisko"]
+    los = [r for r in zn if r["czesc"] == "losowa"]
+    T = [r for r in los if r["ocena"].upper() == "T"]
+    N = [r for r in los if r["ocena"].upper() == "N"]
+    pom_all = [r for r in rows if r["typ_wiersza"] == "pominiecie"]
+    niewybrane = [r for r in pom_all if "(→)" in r["uwagi"]]
+    pom = [r for r in pom_all if not (a.bez_niewybranych and r in niewybrane)]
+    fn_zla = [r for r in N if regula_poprawna(r)]                 # zła reguła zamiast właściwej
+    fn = [regula_poprawna(r) for r in fn_zla] + [r["id_reguly"].strip() for r in pom]
+
+    def odsetek(k, n):
+        lo, hi = wilson(k, n)
+        return {"k": k, "n": n, "wartosc": round(k / n, 4) if n else None,
+                "przedzial95": [round(lo, 4), round(hi, 4)]}
+
+    wyn = {"dokumentow_losowa": len({r["nr"] for r in los} | {r["nr"] for r in rows
+                                     if r["typ_wiersza"] == "kontrola_pominiec"}),
+           "znalezisk_losowa": len(los), "pominiec": len(pom), "pominiec_niewybrane_zrodlo": len(niewybrane),
+           "liczone_niewybrane": not a.bez_niewybranych,
+           "spoza": sum(1 for r in rows if r["typ_wiersza"] == "spoza"),
+           "precyzja": odsetek(len(T), len(T) + len(N)),
+           "czulosc": odsetek(len(T), len(T) + len(fn))}
+    # trafność wrażliwości: znalezisko ma właściwą wrażliwość, także gdy reguła jest inna (np. OPR-09 vs URZ-02)
+    ok_wr = len(T) + sum(1 for r in fn_zla if meta_reg[regula_poprawna(r)]["wrazliwosc"] == r["wrazliwosc"])
+    wyn["trafnosc_wrazliwosci"] = odsetek(ok_wr, len(los))
+    ok_kat = len(T) + sum(1 for r in fn_zla if meta_reg[regula_poprawna(r)]["kategoria"] == r["kategoria"])
+    wyn["trafnosc_kategorii"] = odsetek(ok_kat, len(los))
+
+    # ---- podziały: precyzja wg reguły zastosowanej, czułość wg reguły właściwej ----
+    def podzial(klucz):
+        tp, fp, fnn = collections.Counter(), collections.Counter(), collections.Counter()
+        for r in T:
+            tp[klucz(r["id_reguly"])] += 1
+        for r in N:
+            fp[klucz(r["id_reguly"])] += 1
+        for rid in fn:
+            fnn[klucz(rid)] += 1
+        return {k: {"T": tp[k], "N": fp[k], "pominiete": fnn[k],
+                    "precyzja": round(tp[k] / (tp[k] + fp[k]), 4) if tp[k] + fp[k] else None,
+                    "czulosc": round(tp[k] / (tp[k] + fnn[k]), 4) if tp[k] + fnn[k] else None}
+                for k in sorted(set(tp) | set(fp) | set(fnn))}
+    wyn["wg_kategorii"] = podzial(lambda rid: meta_reg[rid]["kategoria"])
+    wyn["wg_wrazliwosci"] = podzial(lambda rid: meta_reg[rid]["wrazliwosc"])
+    wyn["wg_reguly"] = podzial(lambda rid: rid)
+    wyn["wg_sektora"] = {}
+    for s in sorted({r["plik"].split("-")[0] for r in los}):
+        ts = sum(1 for r in T if r["plik"].startswith(s + "-")); ns = sum(1 for r in N if r["plik"].startswith(s + "-"))
+        wyn["wg_sektora"][s] = odsetek(ts, ts + ns)
+
+    # ---- typ wartości (OSB-01–06): obie części ----
+    osb = [r for r in zn if r["id_reguly"] in REGULY_TYPU]
+    macierz = collections.Counter()
+    for r in osb:
+        przyp = REGULY_TYPU[r["id_reguly"]]
+        prawd = przyp if r["ocena"].upper() == "T" else (r["poprawne"].strip() or "brak_wartosci")
+        macierz[(przyp, prawd)] += 1
+    wyn["typ_wartosci"] = {
+        "trafnosc": odsetek(sum(1 for r in osb if r["ocena"].upper() == "T"), len(osb)),
+        "precyzja_wg_typu": {t: odsetek(macierz[(t, t)], sum(v for (p, _), v in macierz.items() if p == t))
+                             for t in TYPY},
+        "macierz": {f"{p} -> {t}": v for (p, t), v in sorted(macierz.items())}}
+
+    # ---- lista błędów (do kroku 7) ----
+    grupy = collections.Counter((r["id_reguly"], regula_poprawna(r) or "(brak)", r["uwagi"].strip()) for r in N)
+    grupy.update((f"(pominięcie) {r['id_reguly']}", r["zrodlo"], r["uwagi"].strip()) for r in pom_all)
+    with open(out / "bledy.csv", "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f); w.writerow(["regula", "poprawna_lub_tag", "uwagi", "liczba"])
+        for (a1, a2, a3), n in grupy.most_common():
+            w.writerow([a1, a2, a3, n])
+    (out / "wyniki.json").write_text(json.dumps(wyn, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # ---- konsola: tylko liczby ----
+    def fmt(d):
+        return f"{100 * d['wartosc']:.1f}% ({d['k']}/{d['n']}; 95% CI {100 * d['przedzial95'][0]:.1f}–" \
+               f"{100 * d['przedzial95'][1]:.1f}%)" if d["n"] else "—"
+    print(f"[+] część losowa: {wyn['dokumentow_losowa']} dokumentów, {len(los)} znalezisk, pominięć {len(pom)} "
+          f"(w tym z niewybranego źródła {len(niewybrane)}, liczone: {'tak' if not a.bez_niewybranych else 'nie'}), "
+          f"spoza {wyn['spoza']}", file=sys.stderr)
+    print(f"    precyzja:             {fmt(wyn['precyzja'])}", file=sys.stderr)
+    print(f"    czułość:              {fmt(wyn['czulosc'])}", file=sys.stderr)
+    print(f"    trafność wrażliwości: {fmt(wyn['trafnosc_wrazliwosci'])}", file=sys.stderr)
+    print(f"    trafność kategorii:   {fmt(wyn['trafnosc_kategorii'])}", file=sys.stderr)
+    print("[i] wg kategorii (T / N / pominięte):", file=sys.stderr)
+    for k, v in wyn["wg_kategorii"].items():
+        print(f"    {k:40s} {v['T']:4d} {v['N']:3d} {v['pominiete']:3d}", file=sys.stderr)
+    print("[i] precyzja wg sektora: " + ", ".join(f"{s} {fmt(v)}" for s, v in wyn["wg_sektora"].items()),
+          file=sys.stderr)
+    print(f"[+] typ wartości (OSB, obie części): {fmt(wyn['typ_wartosci']['trafnosc'])}", file=sys.stderr)
+    for t, v in wyn["typ_wartosci"]["precyzja_wg_typu"].items():
+        print(f"    {t:12s} {fmt(v)}", file=sys.stderr)
+    print("    pomyłki: " + ", ".join(f"{k} {v}" for k, v in wyn["typ_wartosci"]["macierz"].items()
+                                     if k.split(" -> ")[0] != k.split(" -> ")[1]), file=sys.stderr)
+    print(f"[+] szczegóły -> {out / 'wyniki.json'}, błędy pogrupowane -> {out / 'bledy.csv'}", file=sys.stderr)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = p.add_subparsers(dest="cmd", required=True)
+    wy = sp.add_parser("wyniki", help="precyzja, czułość i trafność typu z wypełnionego formularza")
+    wy.add_argument("--out", required=True, help="katalog weryfikacji (wyniki.json i bledy.csv trafiają tutaj)")
+    wy.add_argument("--ocena", help="wypełniony formularz (domyślnie <out>/ocena.csv)")
+    wy.add_argument("--bez-niewybranych", action="store_true",
+                    help="nie licz pominięć z niewybranego źródła pola (uwaga z „(→)”) do czułości")
+    wy.add_argument("--mimo-bledow", action="store_true", help="licz mimo niekompletnego formularza")
+    wy.set_defaults(func=cmd_wyniki)
     fo = sp.add_parser("formularz", help="formularz oceny ocena.csv (bez jawnych wartości)")
     fo.add_argument("--znaleziska", required=True, help="znaleziska.csv z classify.py")
     fo.add_argument("--out", required=True, help="katalog weryfikacji (z wybrane.csv)")
