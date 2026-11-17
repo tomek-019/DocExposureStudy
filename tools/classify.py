@@ -26,6 +26,7 @@ WERSJA_REGUL = "1.1"   # 1.1 (2026-10-28): poprawka HOST_RE (fałszywe trafienia
 # Zmiany kroku 7 (wersja 1.2 nadawana przy zamrożeniu):
 #   pkt 1: nazwy urządzeń (skanery, drukarki, urządzenia wielofunkcyjne) w polach programu -> URZ-02, nie OPR
 #   pkt 4: nazwy plików roboczych bez rozszerzenia w tytule/temacie (NAZWA_PLIKU_RE) -> TRS-07
+#   pkt 5: prywatny adres IP (WZR-03) tylko z oktetami 0–255
 #   pkt 2: wersje bez kropki: oznaczenie Creative Suite (CS6), wydanie Chromium/Skia (m74), liczba po nazwie (FineReader 14)
 
 # Jawna wersja oprogramowania: numer z kropką albo rok wydania (decyzja 2026-10-28, np. „Word 2016”);
@@ -65,8 +66,10 @@ URZADZENIE_RE = (
 EMAIL_PSEUD_RE = r"\bE-[0-9a-f]{10}@"                        # e-mail po pseudonimizacji w extract.py
 # 2026-10-28 poprawka: IP wymaga 4 oktetów i nie może być częścią dłuższego ciągu (wcześniej „10.1.16” z wersji
 # programu dawało fałszywe R3 — 22 trafienia w pełnej próbie)
+# Krok 7 pkt 5: każdy oktet w zakresie 0–255 (numery wersji typu „10.0.19041.1” nie są adresem IP).
+OKTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
 HOST_RE = (r"(?i)\b[\w-]+\.(?:local|lan|corp|intranet|internal)\b"
-           r"|(?<![\d.])(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?![\d.]|\.\d)")
+           rf"|(?<![\d.])(?:10\.{OKTET}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.{OKTET}\.{OKTET}(?![\d.]|\.\d)")
 
 POLA_OSOBOWE = ("autor", "ostatnio_zapisal", "prawa_autorskie", "wlasciciel_urzadzenia")
 POLA_PROGRAMOW = ("program_tworzacy", "program_pdf", "program_edycji_obrazu", "historia_programy")
