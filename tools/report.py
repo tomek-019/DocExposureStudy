@@ -46,8 +46,11 @@ WYNIKI_P3 = ("zmiana_na_nowsza", "bez_zmiany", "niejednoznaczne", "za_malo_danyc
 POZIOMY = ("pelne", "czesciowe", "minimalne", "nieustalone")
 RE_USZKODZONY = re.compile(r"xref|root object", re.I)       # komunikaty ExifTool dla 10 uszkodzonych PDF
 
-# wersja: numer z kropką (np. 16.0, 2.10.38) albo rok 1990–2039 (np. „Word 2016”); zgodne ze wzorcem classify
-RE_WERSJA = re.compile(r"\b\d+(?:\.\d+)+\b|\b(?:19|20)\d{2}\b")
+# wersja: numer z kropką (np. 16.0, 2.10.38) albo rok 1990–2039 (np. „Word 2016”); zgodne ze wzorcem classify.
+# Krok 7 pkt 2 (jak WERSJA_RE w classify.py): „CS6” (schemat cs), „Skia/PDF m74” (schemat m), liczba 1–2-cyfrowa
+# po nazwie („FineReader 14”, schemat numer). Schematy porównywane tylko między sobą.
+RE_WERSJA = re.compile(r"\b\d+(?:\.\d+)+\b|\b(?:19|20)\d{2}\b|\bCS\d{1,2}\b|(?<=\bSkia/PDF )m\d+\b"
+                       r"|(?<=[^\W\d_]) \d{1,2}(?=$|[\s()|])")
 
 
 def sektor(kod):
@@ -63,9 +66,15 @@ def wersja_z(tekst):
     m = RE_WERSJA.search(tekst or "")
     if not m:
         return None
-    s = m.group(0)
+    s = m.group(0).strip()
+    if s.startswith("CS"):
+        return ("cs", (int(s[2:]),))
+    if s.startswith("m"):
+        return ("m", (int(s[1:]),))
     if "." in s:
         return ("numer", tuple(int(x) for x in s.split(".")))
+    if len(s) <= 2:
+        return ("numer", (int(s),))
     return ("rok", (int(s),))
 
 
