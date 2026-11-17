@@ -25,9 +25,14 @@ from pathlib import Path
 WERSJA_REGUL = "1.1"   # 1.1 (2026-10-28): poprawka HOST_RE (fałszywe trafienia WZR-03 na wersjach)
 # Zmiany kroku 7 (wersja 1.2 nadawana przy zamrożeniu):
 #   pkt 1: nazwy urządzeń (skanery, drukarki, urządzenia wielofunkcyjne) w polach programu -> URZ-02, nie OPR
+#   pkt 2: wersje bez kropki: oznaczenie Creative Suite (CS6), wydanie Chromium/Skia (m74), liczba po nazwie (FineReader 14)
 
-# Jawna wersja oprogramowania: numer z kropką albo rok wydania (decyzja 2026-10-28, np. „Word 2016”).
-WERSJA_RE = r"\d+\.\d+|\b(?:19|20)\d{2}\b"
+# Jawna wersja oprogramowania: numer z kropką albo rok wydania (decyzja 2026-10-28, np. „Word 2016”);
+# krok 7 pkt 2: także „CS6”, „Skia/PDF m74” i liczba 1–2-cyfrowa jako osobne słowo po nazwie („FineReader 14”,
+# „PDFMaker 11 dla programu Word”). Trzycyfrowe liczby (np. „365”) nie są wersją. report.py (P2/P3) używa
+# tego samego zakresu wersji (RE_WERSJA tam).
+WERSJA_RE = (r"\d+\.\d+|\b(?:19|20)\d{2}\b|\bCS\d{1,2}\b|\bSkia/PDF m\d+\b"
+             r"|(?<=[^\W\d_]) \d{1,2}(?=$|[\s()|])")
 # Nazwa pliku roboczego w tytule/temacie (np. „Microsoft Word - pismo_v3.docx”), decyzja 2026-10-28.
 NAZWA_PLIKU_RE = r"^Microsoft (?:Word|Excel|PowerPoint) - |\.(?:docx?|xlsx?|pptx?|odt|rtf|pdf)\b"
 # Nazwa urządzenia w polu programu (krok 7 pkt 1): skanery i urządzenia wielofunkcyjne zapisują w PDF:Producer /
