@@ -27,13 +27,15 @@ Przykład:
 import argparse, collections, csv, re, sys
 from pathlib import Path
 
-WERSJA_REGUL = "1.1"   # 1.1 (2026-10-28): poprawka HOST_RE (fałszywe trafienia WZR-03 na wersjach)
-# Zmiany kroku 7 (wersja 1.2 nadawana przy zamrożeniu):
-#   pkt 1: nazwy urządzeń (skanery, drukarki, urządzenia wielofunkcyjne) w polach programu -> URZ-02, nie OPR
-#   pkt 4: nazwy plików roboczych bez rozszerzenia w tytule/temacie (NAZWA_PLIKU_RE) -> TRS-07
+# 1.1 (2026-10-28): poprawka HOST_RE (fałszywe trafienia WZR-03 na wersjach)
+# 1.2 (2026-11-18, krok 7, ZAMROŻONA do analizy):
+#   pkt 1: nazwy urządzeń (skanery, drukarki, MFP) w polach programu -> URZ-02, nie OPR (URZADZENIE_RE)
+#   pkt 2: wersje bez kropki: „CS6”, „Skia/PDF m74”, liczba 1–2-cyfrowa po nazwie („FineReader 14”)
+#   pkt 4: nazwy plików roboczych bez rozszerzenia w tytule/temacie -> TRS-07 (NAZWA_PLIKU_RE)
 #   pkt 5: prywatny adres IP (WZR-03) tylko z oktetami 0–255
-#   pkt 8a: znacznik biblioteki GD w komentarzu (przeskalowanie obrazu przez CMS) -> OPR-12, nie TRS-04
-#   pkt 2: wersje bez kropki: oznaczenie Creative Suite (CS6), wydanie Chromium/Skia (m74), liczba po nazwie (FineReader 14)
+#   pkt 8a: znacznik biblioteki GD w komentarzu -> OPR-12 (nowa reguła), nie TRS-04
+#   pkt 9: opcja --wrazliwosc (analiza wrażliwości), bez wpływu na wynik główny
+WERSJA_REGUL = "1.2"
 
 # Jawna wersja oprogramowania: numer z kropką albo rok wydania (decyzja 2026-10-28, np. „Word 2016”);
 # krok 7 pkt 2: także „CS6”, „Skia/PDF m74” i liczba 1–2-cyfrowa jako osobne słowo po nazwie („FineReader 14”,
