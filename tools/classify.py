@@ -10,7 +10,8 @@ R0 informacja bez znaczenia dla poufności, R1 niska, R2 umiarkowana, R3 wysoka.
 Rodzaje warunków:
   niepuste          pole ma wartość
   typ=<t>           typ wartości pola osobowego (<pole>_typ z normalize.py)
-  wersja / bez_wersji   wartość pasuje / nie pasuje do WERSJA_RE
+  wersja / bez_wersji   wartość pasuje / nie pasuje do WERSJA_RE (w obu przypadkach: nie jest nazwą urządzenia)
+  urzadzenie        wartość pola programu jest nazwą urządzenia (URZADZENIE_RE; krok 7 pkt 1)
   wzorzec=<regex>   wartość pasuje do wyrażenia; bez_wzorca=<regex> — nie pasuje
   znacznik=<nazwa>  kolumna znaczniki
   sciezka           tag z flagą ścieżki (tagi_ze_sciezka, liczona w extract.py przed pseudonimizacją)
@@ -22,11 +23,32 @@ import argparse, collections, csv, re, sys
 from pathlib import Path
 
 WERSJA_REGUL = "1.1"   # 1.1 (2026-10-28): poprawka HOST_RE (fałszywe trafienia WZR-03 na wersjach)
+# Zmiany kroku 7 (wersja 1.2 nadawana przy zamrożeniu):
+#   pkt 1: nazwy urządzeń (skanery, drukarki, urządzenia wielofunkcyjne) w polach programu -> URZ-02, nie OPR
 
 # Jawna wersja oprogramowania: numer z kropką albo rok wydania (decyzja 2026-10-28, np. „Word 2016”).
 WERSJA_RE = r"\d+\.\d+|\b(?:19|20)\d{2}\b"
 # Nazwa pliku roboczego w tytule/temacie (np. „Microsoft Word - pismo_v3.docx”), decyzja 2026-10-28.
 NAZWA_PLIKU_RE = r"^Microsoft (?:Word|Excel|PowerPoint) - |\.(?:docx?|xlsx?|pptx?|odt|rtf|pdf)\b"
+# Nazwa urządzenia w polu programu (krok 7 pkt 1): skanery i urządzenia wielofunkcyjne zapisują w PDF:Producer /
+# PDF:Creator własną nazwę i model. Linie produktów i modele, nie oprogramowanie producenta (np. „Canon MF Toolbox”,
+# „Epson Scan”, „ScanSnap Manager” zostają programami).
+URZADZENIE_RE = (
+    r"(?i)\b(?:imageRUNNER|iR-ADV|i-SENSYS|imageCLASS|imageFORMULA)\b"
+    r"|\bCanon\s+(?:MF\d|LBP\d|DR-|iR[\s-]?C?\d|PIXMA|MAXIFY)"
+    r"|\b(?:WorkCentre|WorkCenter|AltaLink|VersaLink|DocuCentre|DocuPrint|ApeosPort|Apeos|PrimeLink)\b"
+    r"|\bXerox\s+[BCD]\d{2,4}\b"
+    r"|\bbizhub\b|\bKONICA\s*MINOLTA\b|\bineo\b"
+    r"|\bRICOH\s+(?:MP|IM|SP|Aficio|Pro)\b|\bAficio\b|\bnashuatec\b"
+    r"|\bSHARP\s+(?:MX|AR|BP)-|\b(?:MX|BP)-[A-Z]?\d{3,4}"
+    r"|\bTASKalfa\b|\bECOSYS\b|\bKYOCERA\b|\bUTAX\b|\bTriumph-Adler\b"
+    r"|\bHP\s+(?:Color\s+)?(?:LaserJet|ScanJet|OfficeJet|PageWide|DeskJet|Digital\s+Send(?:er|ing))"
+    r"|\bBrother\s+(?:MFC|DCP|ADS|HL)-?\w|\b(?:MFC|DCP|ADS)-[A-Z]?\d{3,4}"
+    r"|\bEPSON\s+(?:WF-|ET-|L\d|DS-|WorkForce|EcoTank|Perfection)"
+    r"|\bLexmark\b|\be-STUDIO"
+    r"|\bSamsung\s+(?:SCX|CLX|SL|M\d)|\b(?:SCX|CLX)-\d"
+    r"|\bOKI\s?(?:MC|MB|ES)\d|\bKX-MB\d|\bfi-\d{4}[A-Z]?\b|\bAvision\b|\bPlustek\b"
+    r"|\bMFP\b|\bcopier\b|\bmultifunction\b")
 EMAIL_PSEUD_RE = r"\bE-[0-9a-f]{10}@"                        # e-mail po pseudonimizacji w extract.py
 # 2026-10-28 poprawka: IP wymaga 4 oktetów i nie może być częścią dłuższego ciągu (wcześniej „10.1.16” z wersji
 # programu dawało fałszywe R3 — 22 trafienia w pełnej próbie)
@@ -34,6 +56,7 @@ HOST_RE = (r"(?i)\b[\w-]+\.(?:local|lan|corp|intranet|internal)\b"
            r"|(?<![\d.])(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?![\d.]|\.\d)")
 
 POLA_OSOBOWE = ("autor", "ostatnio_zapisal", "prawa_autorskie", "wlasciciel_urzadzenia")
+POLA_PROGRAMOW = ("program_tworzacy", "program_pdf", "program_edycji_obrazu", "historia_programy")
 POLA_DAT = ("data_utworzenia", "data_modyfikacji", "data_metadanych", "data_wydruku")
 # pola tekstowe przeszukiwane wzorcami WZR (bez pól osobowych — tam e-mail ma typ „email”)
 POLA_WZR = ("firma", "program_tworzacy", "program_pdf", "program_edycji_obrazu", "szablon", "tytul", "temat",
@@ -67,6 +90,7 @@ REGULY = [
     ("POC-14", ("historia_programy",), "bez_wersji", K_OPR, "R1"),
     ("URZ-01", ("urzadzenie_producent",), "niepuste", K_URZ, "R1"),
     ("URZ-02", ("urzadzenie_model",), "niepuste", K_URZ, "R1"),
+    ("URZ-02", POLA_PROGRAMOW, "urzadzenie", K_URZ, "R1"),     # pkt 1: model urządzenia zapisany jako program
     ("URZ-03", ("numer_seryjny",), "niepuste", K_URZ, "R3"),
     ("URZ-04", ("numer_seryjny_wewnetrzny",), "niepuste", K_URZ, "R3"),
     ("URZ-05", ("obiektyw",), "niepuste", K_URZ, "R1"),
@@ -113,6 +137,11 @@ REGULY = [
 RANGA = {"R0": 0, "R1": 1, "R2": 2, "R3": 3}
 
 
+def czy_urzadzenie(v: str) -> bool:
+    """Wartość pola programu jest nazwą urządzenia (krok 7 pkt 1); używane też w report.py."""
+    return bool(re.search(URZADZENIE_RE, v or ""))
+
+
 def wartosc(r: dict, pole: str) -> str:
     if pole in POLA_DAT:
         return r.get(f"{pole}_lokalna", "") or r.get(f"{pole}_surowa", "")
@@ -134,10 +163,12 @@ def dopasuj(r: dict, pole: str, war: str):
     if war.startswith("typ="):
         typ = r.get(f"{pole}_typ", "") or "nieustalone"      # brak typu (starsze CSV) = nieustalone
         return zrodlo if typ == war[4:] else []
+    if war == "urzadzenie":
+        return zrodlo if czy_urzadzenie(v) else []
     if war == "wersja":
-        return zrodlo if re.search(WERSJA_RE, v) else []
+        return zrodlo if re.search(WERSJA_RE, v) and not czy_urzadzenie(v) else []
     if war == "bez_wersji":
-        return [] if re.search(WERSJA_RE, v) else zrodlo
+        return [] if re.search(WERSJA_RE, v) or czy_urzadzenie(v) else zrodlo
     if war.startswith("wzorzec="):
         return zrodlo if re.search(war[8:], v, re.I) else []
     if war.startswith("bez_wzorca="):
@@ -191,7 +222,7 @@ def main():
     for kat in sorted({k for k, _ in kw}):
         print(f"   {kat:40s} " + "  ".join(f"{r} {kw[(kat, r)]:5d}" for r in ("R1", "R2", "R3")))
     print("### trafienia reguł (0 = reguła sprawdzona, brak w próbie)")
-    print("   " + ", ".join(f"{id_} {traf[id_]}" for id_, *_ in REGULY))
+    print("   " + ", ".join(f"{id_} {traf[id_]}" for id_ in dict.fromkeys(r[0] for r in REGULY)))
 
 
 if __name__ == "__main__":
