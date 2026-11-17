@@ -26,9 +26,8 @@ from pathlib import Path
 #                   kolumny <pole>_typ dla pól osobowych (typ wartości z extract.py)
 # 1.3 (2026-10-27): 262 nieznane tagi z pełnej próby: nowe źródła istniejących pól (na końcu list priorytetów),
 #                   kolumna „znaczniki” (systemy i usługi po nazwach tagów, bez wartości), rozszerzone IGNOROWANE
-WERSJA_MAPY = "1.3"
-# Zmiany kroku 7 (wersja 1.4 nadawana przy zamrożeniu):
-#   pkt 3: daty zerowe (rok 0000, np. nieustawiona data wydruku) traktowane jak brak wartości
+# 1.4 (2026-11-18, krok 7, ZAMROŻONA do analizy): daty zerowe (rok 0000) jak brak wartości, kolumna zerowe_daty
+WERSJA_MAPY = "1.4"
 
 # Grupy notatek producenta (MakerNotes): z nich bierzemy tylko numery seryjne, właściciela i firmware.
 MN = ["Canon", "CanonCustom", "Nikon", "NikonCustom", "FujiFilm", "Samsung", "Olympus", "Sony", "Panasonic",
