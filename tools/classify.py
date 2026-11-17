@@ -38,7 +38,7 @@ URZADZENIE_RE = (
     r"|\bCanon\s+(?:MF\d|LBP\d|DR-|iR[\s-]?C?\d|PIXMA|MAXIFY)"
     r"|\b(?:WorkCentre|WorkCenter|AltaLink|VersaLink|DocuCentre|DocuPrint|ApeosPort|Apeos|PrimeLink)\b"
     r"|\bXerox\s+[BCD]\d{2,4}\b"
-    r"|\bbizhub\b|\bKONICA\s*MINOLTA\b|\bineo\b"
+    r"|\bbizhub\b|\bKONICA\s*MINOLTA\b|\bineo\b|\bKM_[A-Z]?\d{3,4}[a-z]{0,2}\b"     # KM_C454e: skrót Konica Minolta
     r"|\bRICOH\s+(?:MP|IM|SP|Aficio|Pro)\b|\bAficio\b|\bnashuatec\b"
     r"|\bSHARP\s+(?:MX|AR|BP)-|\b(?:MX|BP)-[A-Z]?\d{3,4}"
     r"|\bTASKalfa\b|\bECOSYS\b|\bKYOCERA\b|\bUTAX\b|\bTriumph-Adler\b"
