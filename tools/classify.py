@@ -16,8 +16,13 @@ Rodzaje warunków:
   znacznik=<nazwa>  kolumna znaczniki
   sciezka           tag z flagą ścieżki (tagi_ze_sciezka, liczona w extract.py przed pseudonimizacją)
 
+Analiza wrażliwości (krok 7 pkt 9): --wrazliwosc ID=Rn nadpisuje wrażliwość reguły (można powtórzyć); nadpisanie
+trafia do kolumny wersja_regul (np. „1.1+OSB-02=R2”), wynik zapisywać do osobnego pliku.
+
 Przykład:
   python3 tools/classify.py --dokumenty dane/proba/dokumenty.csv --out dane/proba/znaleziska.csv
+  python3 tools/classify.py --dokumenty dane/proba/dokumenty.csv --out dane/proba/znaleziska_login_r2.csv \\
+                            --wrazliwosc OSB-02=R2
 """
 import argparse, collections, csv, re, sys
 from pathlib import Path
@@ -200,7 +205,18 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dokumenty", required=True, help="dokumenty.csv z normalize.py")
     ap.add_argument("--out", required=True, help="znaleziska.csv")
+    ap.add_argument("--wrazliwosc", action="append", default=[], metavar="ID=Rn",
+                    help="analiza wrażliwości: nadpisz wrażliwość reguły (np. OSB-02=R2); można powtórzyć")
     a = ap.parse_args()
+
+    nadpis = {}
+    for x in a.wrazliwosc:
+        id_, _, wr = x.partition("=")
+        if id_ not in {r[0] for r in REGULY} or wr not in RANGA:
+            sys.exit(f"[x] złe nadpisanie wrażliwości: {x} (format ID=R0..R3, ID z REGULY)")
+        nadpis[id_] = wr
+    reguly = [(id_, pola, war, kat, nadpis.get(id_, wr)) for id_, pola, war, kat, wr in REGULY]
+    wersja = WERSJA_REGUL + "".join(f"+{k}={v}" for k, v in sorted(nadpis.items()))
 
     with open(a.dokumenty, encoding="utf-8-sig", newline="") as f:
         dok = list(csv.DictReader(f))
@@ -210,13 +226,13 @@ def main():
 
     zn, traf = [], collections.Counter()
     for r in dok:
-        for id_, pola, war, kat, wr in REGULY:
+        for id_, pola, war, kat, wr in reguly:
             for pole in pola:
                 for zrodlo in dopasuj(r, pole, war):
                     zn.append({"plik": r["plik"], "instytucja": r["instytucja"],
                                "sektor": r["instytucja"].split("-")[0], "format": r.get("format", ""),
                                "id_reguly": id_, "kategoria": kat, "wrazliwosc": wr,
-                               "pole": pole, "zrodlo": zrodlo, "wersja_regul": WERSJA_REGUL})
+                               "pole": pole, "zrodlo": zrodlo, "wersja_regul": wersja})
                     traf[id_] += 1
 
     kol = ["plik", "instytucja", "sektor", "format", "id_reguly", "kategoria", "wrazliwosc", "pole", "zrodlo",
@@ -226,7 +242,7 @@ def main():
         w = csv.DictWriter(f, fieldnames=kol); w.writeheader(); w.writerows(zn)
 
     # ---- podsumowanie (same liczby) ----
-    print(f"[+] {len(zn)} znalezisk w {len(dok)} dokumentach -> {a.out} (reguły v{WERSJA_REGUL})", file=sys.stderr)
+    print(f"[+] {len(zn)} znalezisk w {len(dok)} dokumentach -> {a.out} (reguły v{wersja})", file=sys.stderr)
     maks = {}
     for z in zn:
         maks[z["plik"]] = max(maks.get(z["plik"], "R0"), z["wrazliwosc"], key=RANGA.get)
