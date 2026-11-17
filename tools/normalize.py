@@ -27,6 +27,8 @@ from pathlib import Path
 # 1.3 (2026-10-27): 262 nieznane tagi z pełnej próby: nowe źródła istniejących pól (na końcu list priorytetów),
 #                   kolumna „znaczniki” (systemy i usługi po nazwach tagów, bez wartości), rozszerzone IGNOROWANE
 WERSJA_MAPY = "1.3"
+# Zmiany kroku 7 (wersja 1.4 nadawana przy zamrożeniu):
+#   pkt 3: daty zerowe (rok 0000, np. nieustawiona data wydruku) traktowane jak brak wartości
 
 # Grupy notatek producenta (MakerNotes): z nich bierzemy tylko numery seryjne, właściciela i firmware.
 MN = ["Canon", "CanonCustom", "Nikon", "NikonCustom", "FujiFilm", "Samsung", "Olympus", "Sony", "Panasonic",
@@ -232,6 +234,8 @@ FORMATY = {"PDF", "DOC", "DOCX", "DOCM", "DOTX", "DOT", "XLS", "XLSX", "XLSM", "
            "PPSX", "ODT", "ODS", "ODP", "RTF", "PNG", "JPEG", "TIFF"}
 
 PUSTE = {"", "()", "[]", "-"}
+# krok 7 pkt 3: data zerowa = pole nieustawione (np. LastPrinted „0000:00:00 00:00:00”), nie nieczytelny format
+RE_ZEROWA_DATA = re.compile(r"^0{4}[:\-]0{2}[:\-]0{2}(?:[ T]0{2}:0{2}(?::0{2})?(?:\.0+)?)?\s*(?:Z|[+\-]\d{2}:?\d{2})?$")
 
 # ---------- daty ----------
 RE_DATA = re.compile(
@@ -350,6 +354,11 @@ def normalizuj_plik(tagi, typy=None):
                     kand.append((k, tagi[k]))
         uzyte.update(k for k, _ in kand)
         kand = [(k, v) for k, v in kand if v.strip() not in PUSTE]
+        if rodzaj == "data":
+            zerowe = [k for k, v in kand if RE_ZEROWA_DATA.match(v.strip())]
+            if zerowe:
+                wiersz.setdefault("_zerowe_daty", []).append(pole)
+                kand = [(k, v) for k, v in kand if k not in zerowe]
         if pole == "program_tworzacy":
             # wyjątek warunkowy (extract.py): pseudonim = rozpoznana osoba, nie program
             kand = [(k, v) for k, v in kand if not (k in ZRODLA_WARUNKOWE and PSEUDONIM_RE.match(v.strip()))]
@@ -385,6 +394,7 @@ def normalizuj_plik(tagi, typy=None):
         if trafione:
             znaczniki.append(nazwa)
     wiersz["znaczniki"] = ";".join(znaczniki)
+    wiersz["zerowe_daty"] = ";".join(wiersz.pop("_zerowe_daty", []))
     return wiersz, uzyte
 
 
@@ -458,7 +468,7 @@ def main():
         wyniki.append({"plik": plik, **d["meta"], **meta_s.get(plik, {}), "wersja_mapy": WERSJA_MAPY, **w})
 
     stale = ["plik", "instytucja", "url", "sha256", "z_archiwum", "data_w_archiwum", "wersja_mapy",
-             "n_pol_kanonicznych", "rozbiezne_pola", "znaczniki", "tagi_ze_sciezka"]
+             "n_pol_kanonicznych", "rozbiezne_pola", "znaczniki", "tagi_ze_sciezka", "zerowe_daty"]
     kol = stale + kolumny_pol()
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     with open(a.out, "w", encoding="utf-8-sig", newline="") as f:
@@ -471,6 +481,9 @@ def main():
           file=sys.stderr)
     print("[i] znaczniki (dokumenty): " + (", ".join(f"{k}={v}" for k, v in licz_znaczniki.most_common()) or "brak"),
           file=sys.stderr)
+    zer = collections.Counter(p for w in wyniki for p in w["zerowe_daty"].split(";") if p)
+    print("[i] daty zerowe pominięte (pole: dokumenty): " + (", ".join(f"{k}={v}" for k, v in zer.most_common())
+                                                             or "brak"), file=sys.stderr)
     print("[i] rozbieżności między źródłami (pole: dokumenty): " +
           (", ".join(f"{k}={v}" for k, v in rozb.most_common()) or "brak"), file=sys.stderr)
     if nieznane:
