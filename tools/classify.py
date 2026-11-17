@@ -27,6 +27,7 @@ WERSJA_REGUL = "1.1"   # 1.1 (2026-10-28): poprawka HOST_RE (fałszywe trafienia
 #   pkt 1: nazwy urządzeń (skanery, drukarki, urządzenia wielofunkcyjne) w polach programu -> URZ-02, nie OPR
 #   pkt 4: nazwy plików roboczych bez rozszerzenia w tytule/temacie (NAZWA_PLIKU_RE) -> TRS-07
 #   pkt 5: prywatny adres IP (WZR-03) tylko z oktetami 0–255
+#   pkt 8a: znacznik biblioteki GD w komentarzu (przeskalowanie obrazu przez CMS) -> OPR-12, nie TRS-04
 #   pkt 2: wersje bez kropki: oznaczenie Creative Suite (CS6), wydanie Chromium/Skia (m74), liczba po nazwie (FineReader 14)
 
 # Jawna wersja oprogramowania: numer z kropką albo rok wydania (decyzja 2026-10-28, np. „Word 2016”);
@@ -63,6 +64,8 @@ URZADZENIE_RE = (
     r"|\bSamsung\s+(?:SCX|CLX|SL|M\d)|\b(?:SCX|CLX)-\d"
     r"|\bOKI\s?(?:MC|MB|ES)\d|\bKX-MB\d|\bfi-\d{4}[A-Z]?\b|\bAvision\b|\bPlustek\b"
     r"|\bMFP\b|\bcopier\b|\bmultifunction\b")
+# Znacznik biblioteki GD w komentarzu JPEG („CREATOR: gd-jpeg v1.0 (using IJG JPEG v62), quality = …”), krok 7 pkt 8a.
+GD_RE = r"\bgd-jpeg\b"
 EMAIL_PSEUD_RE = r"\bE-[0-9a-f]{10}@"                        # e-mail po pseudonimizacji w extract.py
 # 2026-10-28 poprawka: IP wymaga 4 oktetów i nie może być częścią dłuższego ciągu (wcześniej „10.1.16” z wersji
 # programu dawało fałszywe R3 — 22 trafienia w pełnej próbie)
@@ -121,7 +124,8 @@ REGULY = [
     ("TRS-01", ("tytul",), f"bez_wzorca={NAZWA_PLIKU_RE}", K_TRS, "R0"),
     ("TRS-02", ("temat",), f"bez_wzorca={NAZWA_PLIKU_RE}", K_TRS, "R0"),
     ("TRS-03", ("slowa_kluczowe",), "niepuste", K_TRS, "R0"),
-    ("TRS-04", ("komentarz",), "niepuste", K_TRS, "R1"),
+    ("TRS-04", ("komentarz",), f"bez_wzorca={GD_RE}", K_TRS, "R1"),
+    ("OPR-12", ("komentarz",), f"wzorzec={GD_RE}", K_OPR, "R1"),    # pkt 8a: oprogramowanie serwera (GD)
     ("TRS-05", ("linki",), "niepuste", K_TRS, "R1"),
     ("TRS-06", ("jezyk",), "niepuste", K_FMT, "R0"),
     ("POC-01", ("id_dokumentu",), "niepuste", K_POC, "R1"),
