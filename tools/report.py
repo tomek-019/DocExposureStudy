@@ -11,7 +11,8 @@ RQ2 — elementy profilu instytucji (zamknięta lista P1–P6, dziennik 2026-11-
                         niejednoznaczne / za_malo_danych (osoba = ostatnio_zapisal, w razie braku autor;
                         wersja z program_tworzacy, a gdy brak w nazwie — z wersja_aplikacji; bez program_pdf)
   P4 systemy/usługi  znaczniki (system_dokumentow, sharepoint, etykieta_msip, …) i pole system
-  P5 sprzęt          różne pary producent+model, liczba różnych numerów seryjnych
+  P5 sprzęt          różne pary producent+model, liczba różnych numerów seryjnych; od kroku 7 także nazwy urządzeń
+                     zapisane w polach programu (classify.czy_urzadzenie) — nie wchodzą wtedy do P2/P3
   P6 wspólne źródła  identyfikatory oryginału i szablony występujące w >= 2 dokumentach
 
 RQ3 — poziom zawartości metadanych dokumentu (dziennik 2026-11-08):
@@ -29,6 +30,8 @@ Przykład:
 """
 import argparse, collections, csv, datetime as dt, re, sys
 from pathlib import Path
+
+from classify import czy_urzadzenie          # krok 7 pkt 1 (decyzja A): ta sama definicja urządzenia co w RQ1
 
 OSOBA_TYPY = {"osoba", "login", "email"}                   # P1, P3: typy oznaczające osobę
 PELNE_TYPY = OSOBA_TYPY | {"organizacja"}                  # RQ3: poziom „pelne”
@@ -197,7 +200,7 @@ def main():
         wersje_rodzin = collections.defaultdict(set)
         for w in ws:
             for pole in POLA_PROGRAMOW:
-                if niepuste(w, pole):
+                if niepuste(w, pole) and not czy_urzadzenie(w[pole]):
                     rd = rodzina(w[pole]); v = wersja_z(w[pole])
                     if not v and pole == "program_tworzacy":     # Office: wersja tylko w wersja_aplikacji
                         v = wersja_glowna(w.get("wersja_aplikacji"))
@@ -213,7 +216,7 @@ def main():
         punkty = collections.defaultdict(list)
         for w in ws:
             os_, d, prog = osoba_dokumentu(w), data_dokumentu(w), (w.get("program_tworzacy") or "").strip()
-            if not (os_ and d and prog):
+            if not (os_ and d and prog) or czy_urzadzenie(prog):
                 continue
             v = wersja_z(prog) or wersja_glowna(w.get("wersja_aplikacji"))
             if v:
@@ -234,7 +237,9 @@ def main():
         # P5
         sprzet = {(w.get("urzadzenie_producent", "").strip().casefold(), w.get("urzadzenie_model", "").strip().casefold())
                   for w in ws if niepuste(w, "urzadzenie_producent") or niepuste(w, "urzadzenie_model")}
-        r.update({"P5_urzadzenia": len(sprzet),
+        z_programu = {("", " ".join(w[p].split()).casefold()) for w in ws for p in POLA_PROGRAMOW
+                      if niepuste(w, p) and czy_urzadzenie(w[p])}
+        r.update({"P5_urzadzenia": len(sprzet | z_programu), "P5_urzadzenia_z_pol_programu": len(z_programu),
                   "P5_numery_seryjne": len({w["numer_seryjny"].strip() for w in ws if niepuste(w, "numer_seryjny")})})
         # P6
         for pole, nazwa in (("id_oryginalu", "P6_wspolne_id_oryginalu"), ("szablon", "P6_wspolne_szablony")):
