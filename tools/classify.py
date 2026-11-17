@@ -25,6 +25,7 @@ from pathlib import Path
 WERSJA_REGUL = "1.1"   # 1.1 (2026-10-28): poprawka HOST_RE (fałszywe trafienia WZR-03 na wersjach)
 # Zmiany kroku 7 (wersja 1.2 nadawana przy zamrożeniu):
 #   pkt 1: nazwy urządzeń (skanery, drukarki, urządzenia wielofunkcyjne) w polach programu -> URZ-02, nie OPR
+#   pkt 4: nazwy plików roboczych bez rozszerzenia w tytule/temacie (NAZWA_PLIKU_RE) -> TRS-07
 #   pkt 2: wersje bez kropki: oznaczenie Creative Suite (CS6), wydanie Chromium/Skia (m74), liczba po nazwie (FineReader 14)
 
 # Jawna wersja oprogramowania: numer z kropką albo rok wydania (decyzja 2026-10-28, np. „Word 2016”);
@@ -34,7 +35,14 @@ WERSJA_REGUL = "1.1"   # 1.1 (2026-10-28): poprawka HOST_RE (fałszywe trafienia
 WERSJA_RE = (r"\d+\.\d+|\b(?:19|20)\d{2}\b|\bCS\d{1,2}\b|\bSkia/PDF m\d+\b"
              r"|(?<=[^\W\d_]) \d{1,2}(?=$|[\s()|])")
 # Nazwa pliku roboczego w tytule/temacie (np. „Microsoft Word - pismo_v3.docx”), decyzja 2026-10-28.
-NAZWA_PLIKU_RE = r"^Microsoft (?:Word|Excel|PowerPoint) - |\.(?:docx?|xlsx?|pptx?|odt|rtf|pdf)\b"
+# Krok 7 pkt 4: także nazwy bez rozszerzenia (kształty z pełnej próby, przegląd Tomka 2026-11-17):
+#   - bez spacji i z podkreśleniem (pliki robocze, np. „raport_3_2019”),
+#   - z podkreśleniem i zakończone ≥ 8 cyframi („…_<RRRRMMDD>”, skany „<model>_<znacznik czasu>”),
+#   - zakończone „-” + ≥ 12 cyfr (skany „<model>-<kod>-<RRRRMMDDggmmss>”),
+#   - 12 znaków szesnastkowych + 12 cyfr (skan: adres MAC urządzenia + znacznik czasu RRMMDDggmmss),
+#   - rozszerzenia programów graficznych (.ai, .cdr, .indd).
+NAZWA_PLIKU_RE = (r"^Microsoft (?:Word|Excel|PowerPoint) - |\.(?:docx?|xlsx?|pptx?|odt|rtf|pdf|ai|cdr|indd)\b"
+                  r"|^[^\s_]*_\S*$|^(?=.*_).*\d{8,}\s*$|-\d{12,}\s*$|^[0-9A-F]{12}\d{12}$")
 # Nazwa urządzenia w polu programu (krok 7 pkt 1): skanery i urządzenia wielofunkcyjne zapisują w PDF:Producer /
 # PDF:Creator własną nazwę i model. Linie produktów i modele, nie oprogramowanie producenta (np. „Canon MF Toolbox”,
 # „Epson Scan”, „ScanSnap Manager” zostają programami).
